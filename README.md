@@ -1,6 +1,6 @@
 # 🔬 SCIChat — AI Research Assistant for Scientific Papers
 
-**SCIChat** adalah aplikasi asisten riset ilmiah cerdas berbasis Flutter yang dirancang untuk membantu akademisi, peneliti, dan mahasiswa dalam mencari, menganalisis, dan mendiskusikan makalah akademik secara interaktif dengan kecerdasan buatan.
+**SCIChat** adalah asisten riset ilmiah berbasis AI yang dikembangkan dengan Flutter untuk membantu pencarian makalah akademik dan mendukung proses penelitian secara komprehensif.
 
 ---
 
