@@ -47,7 +47,7 @@ class SearchDiagnostics {
 }
 
 class SearchService {
-  static const _arxivBase = 'http://export.arxiv.org/api/query';
+  static const _arxivBase = 'https://export.arxiv.org/api/query';
   static const _crossrefBase = 'https://api.crossref.org/works';
   static const _openAlexBase = 'https://api.openalex.org/works';
   static const _semanticScholarBase = 'https://api.semanticscholar.org/graph/v1/paper/search';

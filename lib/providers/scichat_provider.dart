@@ -22,11 +22,47 @@ class SciChatProvider extends ChangeNotifier {
   bool _hasCustomGemini = false;
   final _uuid = const Uuid();
   bool _isCancelled = false;
+  int _activeGenerationToken = 0;
 
   void cancelGeneration() {
     if (_appState == AppState.streaming || _appState == AppState.thinking) {
       _isCancelled = true;
       notifyListeners();
+    }
+  }
+
+  void _abortActiveGenerationForSessionSwitch({bool saveOutgoing = true}) {
+    if (_appState == AppState.streaming || _appState == AppState.thinking) {
+      _isCancelled = true;
+      _activeGenerationToken++;
+
+      if (saveOutgoing) {
+        _messages = _messages.map((m) {
+          if (m.isAssistant &&
+              (m.status == MessageStatus.streaming ||
+                  m.status == MessageStatus.sending)) {
+            if (m.content.trim().isNotEmpty) {
+              return m.copyWith(
+                status: MessageStatus.done,
+                isTruncated: true,
+                finishReason: 'cancelled',
+              );
+            } else {
+              return null;
+            }
+          }
+          return m;
+        }).whereType<ChatMessage>().toList();
+
+        _syncSession();
+      }
+
+      _appState = AppState.ready;
+      _statusText = null;
+      _errorMessage = null;
+      _isCancelled = false;
+    } else if (saveOutgoing && _activeSessionId.isNotEmpty) {
+      _syncSession();
     }
   }
 
@@ -439,6 +475,7 @@ class SciChatProvider extends ChangeNotifier {
   }
 
   void createNewSession({bool notify = true}) {
+    _abortActiveGenerationForSessionSwitch();
     final newSession = ChatSession(
       id: _uuid.v4(),
       title: 'New Chat',
@@ -457,6 +494,8 @@ class SciChatProvider extends ChangeNotifier {
   }
 
   void loadSession(String id) {
+    if (_activeSessionId == id) return;
+    _abortActiveGenerationForSessionSwitch();
     final session = _sessions.firstWhere((s) => s.id == id, orElse: () => _sessions.first);
     _activeSessionId = session.id;
     _messages = List.from(session.messages);
@@ -468,6 +507,9 @@ class SciChatProvider extends ChangeNotifier {
   }
 
   void deleteSession(String id) {
+    if (_activeSessionId == id) {
+      _abortActiveGenerationForSessionSwitch(saveOutgoing: false);
+    }
     _sessions.removeWhere((s) => s.id == id);
     if (_sessions.isEmpty) {
       createNewSession(notify: false);
@@ -513,6 +555,9 @@ class SciChatProvider extends ChangeNotifier {
       _retrieveEvidence(_activeContexts);
       _pendingAttachment = null;
     }
+
+    final targetSessionId = _activeSessionId;
+    final genToken = ++_activeGenerationToken;
 
     // Add user message
     final userMsg = ChatMessage(
@@ -822,12 +867,14 @@ class SciChatProvider extends ChangeNotifier {
         papers = combined.where((p) => seen.add(p.id)).toList();
       }
 
-      final chatHistory = _messages.where((m) => m.status == MessageStatus.done && m.id != userMsg.id).toList();
-      String streamedContent = '';
-      bool receivedFirstChunk = false;
-      DateTime lastNotifyTime = DateTime.now();
-      const throttleDuration = Duration(milliseconds: 100);
-      _isCancelled = false;
+    if (_activeSessionId != targetSessionId || _activeGenerationToken != genToken) return;
+
+    final chatHistory = _messages.where((m) => m.status == MessageStatus.done && m.id != userMsg.id).toList();
+    String streamedContent = '';
+    bool receivedFirstChunk = false;
+    DateTime lastNotifyTime = DateTime.now();
+    const throttleDuration = Duration(milliseconds: 100);
+    _isCancelled = false;
 
       try {
         final stream = _gemini.chatStream(
@@ -840,8 +887,8 @@ class SciChatProvider extends ChangeNotifier {
         );
 
         await for (final chunk in stream) {
-          if (_isCancelled) {
-            debugPrint('[AI_DEBUG] Stream dibatalkan oleh pengguna');
+          if (_isCancelled || _activeSessionId != targetSessionId || _activeGenerationToken != genToken) {
+            debugPrint('[AI_DEBUG] Stream dibatalkan atau sesi berganti');
             break;
           }
           final isFirst = !receivedFirstChunk;
@@ -855,6 +902,9 @@ class SciChatProvider extends ChangeNotifier {
           final now = DateTime.now();
           if (isFirst || now.difference(lastNotifyTime) >= throttleDuration) {
             lastNotifyTime = now;
+            if (_activeSessionId != targetSessionId || _activeGenerationToken != genToken) {
+              break;
+            }
             final partialMsg = thinkingMsg.copyWith(
               content: streamedContent,
               status: MessageStatus.streaming,
@@ -865,8 +915,16 @@ class SciChatProvider extends ChangeNotifier {
           }
         }
 
+        if (_activeSessionId != targetSessionId || _activeGenerationToken != genToken) {
+          debugPrint('[AI_DEBUG] Mengabaikan penyelesaian stream dari sesi lama/tidak aktif');
+          return;
+        }
+
         if (_isCancelled) {
           _isCancelled = false;
+          if (_activeSessionId != targetSessionId || _activeGenerationToken != genToken) {
+            return;
+          }
           if (streamedContent.trim().isNotEmpty) {
             final cancelledMsg = thinkingMsg.copyWith(
               content: streamedContent,
@@ -918,6 +976,10 @@ class SciChatProvider extends ChangeNotifier {
           papers: papers,
         );
       } catch (streamError) {
+        if (_activeSessionId != targetSessionId || _activeGenerationToken != genToken) {
+          debugPrint('[AI_DEBUG] Mengabaikan error stream dari sesi lama: $streamError');
+          return;
+        }
         // Fallback terkendali: jika gagal sebelum token pertama atau stream kosong
         if (!receivedFirstChunk || streamedContent.trim().isEmpty) {
           debugPrint('[AI_DEBUG] Stream gagal ($streamError), memicu fallback monolitik...');
@@ -986,6 +1048,10 @@ class SciChatProvider extends ChangeNotifier {
         }
       }
     } catch (e) {
+      if (_activeSessionId != targetSessionId || _activeGenerationToken != genToken) {
+        debugPrint('[AI_DEBUG] Mengabaikan error umum dari sesi lama: $e');
+        return;
+      }
       final errMsg = thinkingMsg.copyWith(
         content: '',
         status: MessageStatus.error,
@@ -995,6 +1061,9 @@ class SciChatProvider extends ChangeNotifier {
       _messages = _messages.map((m) => m.id == assistantId ? errMsg : m).toList();
       _appState = AppState.error;
       _errorMessage = e.toString();
+    }
+    if (_activeSessionId != targetSessionId || _activeGenerationToken != genToken) {
+      return;
     }
     _statusText = null;
     
@@ -1102,6 +1171,9 @@ class SciChatProvider extends ChangeNotifier {
     _errorMessage = null;
     _isCancelled = false;
 
+    final targetSessionId = _activeSessionId;
+    final genToken = ++_activeGenerationToken;
+
     final inProgressMsg = targetMsg.copyWith(
       status: MessageStatus.streaming,
       errorType: null,
@@ -1139,8 +1211,8 @@ class SciChatProvider extends ChangeNotifier {
       );
 
       await for (final chunk in stream) {
-        if (_isCancelled) {
-          debugPrint('[AI_DEBUG] Kelanjutan respons dibatalkan pengguna');
+        if (_isCancelled || _activeSessionId != targetSessionId || _activeGenerationToken != genToken) {
+          debugPrint('[AI_DEBUG] Kelanjutan respons dibatalkan atau sesi berganti');
           break;
         }
 
@@ -1156,6 +1228,9 @@ class SciChatProvider extends ChangeNotifier {
         final now = DateTime.now();
         if (isFirst || now.difference(lastNotifyTime) >= throttleDuration) {
           lastNotifyTime = now;
+          if (_activeSessionId != targetSessionId || _activeGenerationToken != genToken) {
+            break;
+          }
           final partialMsg = targetMsg.copyWith(
             content: combined,
             status: MessageStatus.streaming,
@@ -1165,11 +1240,19 @@ class SciChatProvider extends ChangeNotifier {
         }
       }
 
+      if (_activeSessionId != targetSessionId || _activeGenerationToken != genToken) {
+        debugPrint('[AI_DEBUG] Mengabaikan penyelesaian kelanjutan dari sesi lama/tidak aktif');
+        return;
+      }
+
       final processedContinuation = _stripLeadingOverlap(initialContent, continuationBuffer);
       final combined = _combineText(initialContent, processedContinuation);
 
       if (_isCancelled) {
         _isCancelled = false;
+        if (_activeSessionId != targetSessionId || _activeGenerationToken != genToken) {
+          return;
+        }
         final cancelledMsg = targetMsg.copyWith(
           content: combined,
           status: MessageStatus.done,
@@ -1197,6 +1280,10 @@ class SciChatProvider extends ChangeNotifier {
 
       notifyListeners();
     } catch (e) {
+      if (_activeSessionId != targetSessionId || _activeGenerationToken != genToken) {
+        debugPrint('[AI_DEBUG] Mengabaikan error kelanjutan dari sesi lama: $e');
+        return;
+      }
       debugPrint('[AI_DEBUG] Gagal melanjutkan respons: $e');
       // PERTAHANKAN TEKS YANG SUDAH DITERIMA
       final processedContinuation = _stripLeadingOverlap(initialContent, continuationBuffer);

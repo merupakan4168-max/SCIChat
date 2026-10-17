@@ -149,5 +149,39 @@ void main() {
       expect(paper.journalRef, isNull,
           reason: 'Foreign namespace <other:journal_ref> or unnamespaced <journal_ref> must NOT be parsed as arXiv journalRef');
     });
+
+    test('uses HTTPS scheme for arXiv API queries to prevent Android cleartext block', () async {
+      Uri? capturedSearchUri;
+      Uri? capturedFetchByIdUri;
+
+      final client = _MockHttpClient((request) async {
+        if (request.url.queryParameters.containsKey('search_query')) {
+          capturedSearchUri = request.url;
+        } else if (request.url.queryParameters.containsKey('id_list')) {
+          capturedFetchByIdUri = request.url;
+        }
+        return http.Response(
+          '<?xml version="1.0" encoding="UTF-8"?><feed xmlns="http://www.w3.org/2005/Atom"></feed>',
+          200,
+          headers: {'content-type': 'application/atom+xml'},
+        );
+      });
+
+      final service = SearchService(client: client);
+      await service.search(query: 'quantum', onlySource: SearchService.arxivSource);
+      await service.fetchById('2301.12345');
+
+      expect(capturedSearchUri, isNotNull);
+      expect(capturedSearchUri!.scheme, equals('https'),
+          reason: 'arXiv search_query endpoint must use HTTPS to satisfy Android Network Security');
+      expect(capturedSearchUri!.host, equals('export.arxiv.org'));
+      expect(capturedSearchUri!.path, equals('/api/query'));
+
+      expect(capturedFetchByIdUri, isNotNull);
+      expect(capturedFetchByIdUri!.scheme, equals('https'),
+          reason: 'arXiv fetchById endpoint must use HTTPS to satisfy Android Network Security');
+      expect(capturedFetchByIdUri!.host, equals('export.arxiv.org'));
+      expect(capturedFetchByIdUri!.path, equals('/api/query'));
+    });
   });
 }
