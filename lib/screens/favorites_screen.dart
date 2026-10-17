@@ -2,7 +2,6 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import '../providers/scichat_provider.dart';
 import '../theme/scichat_theme.dart';
@@ -501,7 +500,12 @@ class _NoteDetailSheet extends StatelessWidget {
                           onPressed: () {
                             HapticFeedback.lightImpact();
                             final text = generateNoteShareText(note);
-                            Share.share(text, subject: 'Ekspor Catatan Riset');
+                            SharePlus.instance.share(
+                              ShareParams(
+                                text: text,
+                                subject: 'Ekspor Catatan Riset',
+                              ),
+                            );
                           },
                         )),
                       ],

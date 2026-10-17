@@ -409,7 +409,12 @@ class _ChatScreenState extends State<ChatScreen> {
             onPressed: () {
               HapticFeedback.lightImpact();
               final markdown = _generateMarkdown(provider.messages);
-              Share.share(markdown, subject: 'Ekspor Chat SCIChat');
+              SharePlus.instance.share(
+                ShareParams(
+                  text: markdown,
+                  subject: 'Ekspor Chat SCIChat',
+                ),
+              );
             },
             tooltip: 'Ekspor Chat',
           )),
@@ -428,44 +433,6 @@ class _ChatScreenState extends State<ChatScreen> {
       }
     }
     return buffer.toString();
-  }
-
-  void _showClearDialog(BuildContext context, SciChatProvider provider) {
-    showDialog(
-      context: context,
-      builder: (_) => AlertDialog(
-        backgroundColor: context.colors.surface2,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12),
-          side: BorderSide(color: context.colors.borderSubtle),
-        ),
-        title: Text(
-          'Hapus percakapan?',
-          style: context.typography.titleLarge?.copyWith(
-            fontWeight: FontWeight.w600,
-          ),
-        ),
-        content: Text(
-          'Ini akan menghapus semua pesan dari sesi saat ini. Makalah yang disimpan akan tetap ada di pustaka Anda.',
-          style: context.typography.bodyMedium?.copyWith(
-            color: context.colors.textSecondary,
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text('Batal', style: context.typography.labelLarge?.copyWith(color: context.colors.textMuted)),
-          ),
-          TextButton(
-            onPressed: () {
-              provider.clearMessages();
-              Navigator.pop(context);
-            },
-            child: Text('Hapus', style: context.typography.labelLarge?.copyWith(color: const Color(0xFFB05050))),
-          ),
-        ],
-      ),
-    );
   }
 }
 
@@ -873,7 +840,7 @@ class _InputAreaState extends State<_InputArea> {
         }
       }
     } catch (e) {
-      print('Error picking file: $e');
+      debugPrint('[FILE_PICKER_DEBUG] Error picking file: $e');
     }
   }
 

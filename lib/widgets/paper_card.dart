@@ -3,7 +3,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_animate/flutter_animate.dart';
-import 'package:google_fonts/google_fonts.dart';
 import '../models/models.dart';
 import '../theme/scichat_theme.dart';
 import 'dynamic_source_button.dart';
@@ -126,7 +125,7 @@ class PaperCard extends StatelessWidget {
                         ),
                         onPressed: () {
                           HapticFeedback.selectionClick();
-                          if (onFavoriteToggle != null) onFavoriteToggle!();
+                          onFavoriteToggle();
                         },
                         padding: const EdgeInsets.all(8),
                         constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
@@ -402,20 +401,6 @@ class _CategoryChip extends StatelessWidget {
           fontSize: 10,
         ),
       ),
-    );
-  }
-}
-
-class _CategoryChips extends StatelessWidget {
-  final List<String> categories;
-  const _CategoryChips({required this.categories});
-
-  @override
-  Widget build(BuildContext context) {
-    return Wrap(
-      spacing: 6,
-      runSpacing: 4,
-      children: categories.map((cat) => _CategoryChip(category: cat)).toList(),
     );
   }
 }

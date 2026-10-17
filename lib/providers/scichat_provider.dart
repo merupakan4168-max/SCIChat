@@ -209,7 +209,7 @@ class SciChatProvider extends ChangeNotifier {
           }
         }
       } catch (e) {
-        print('Evidence retrieval failed for ${paper.id}: $e');
+        debugPrint('[EVIDENCE_DEBUG] Evidence retrieval failed for ${paper.id}: $e');
         if (isAbstractValid(paper.summary)) {
           _contextEvidence[paper.id] = const PaperEvidence(level: EvidenceLevel.abstractOnly);
         } else {
@@ -771,7 +771,7 @@ class SciChatProvider extends ChangeNotifier {
                   pdfText = extracted;
                 }
               } catch(e) {
-                print('Failed to read local PDF: $e');
+                debugPrint('[CHAT_DEBUG] Failed to read local PDF: $e');
               }
             } else {
               final extracted = await _pdf.extractTextFromUrl(paperContext.pdfUrl);
@@ -1427,7 +1427,7 @@ class SciChatProvider extends ChangeNotifier {
             .timeout(const Duration(seconds: 40));
       }
     } catch (e) {
-      print('Deep read failed for ${p.id}: $e');
+      debugPrint('[READ_DEBUG] Deep read failed for ${p.id}: $e');
     }
     return null;
   }
@@ -1443,7 +1443,7 @@ class SciChatProvider extends ChangeNotifier {
             final bytes = await file.readAsBytes();
             pdfText = await _pdf.extractTextFromBytes(bytes);
           } catch(e) {
-            print('Failed to read local PDF for summary: $e');
+            debugPrint('[SUMMARY_DEBUG] Failed to read local PDF for summary: $e');
           }
         } else {
           pdfText = await _pdf.extractTextFromUrl(paper.pdfUrl);

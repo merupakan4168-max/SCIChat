@@ -5,7 +5,6 @@ import 'package:flutter/services.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
-import 'package:url_launcher/url_launcher.dart';
 import '../models/models.dart';
 import '../providers/scichat_provider.dart';
 import '../theme/scichat_theme.dart';
@@ -15,7 +14,6 @@ import '../widgets/source_badge.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import '../widgets/paper_figures.dart';
 import '../widgets/chat_bubble.dart';
-import 'package:http/http.dart' as http;
 
 import 'package:markdown/markdown.dart' as md;
 
