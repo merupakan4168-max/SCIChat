@@ -11,6 +11,7 @@ import '../providers/scichat_provider.dart';
 import '../theme/scichat_theme.dart';
 import '../widgets/press_feedback.dart';
 import '../widgets/dynamic_source_button.dart';
+import '../widgets/source_badge.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import '../widgets/paper_figures.dart';
 import '../widgets/chat_bubble.dart';
@@ -200,26 +201,30 @@ class _PaperDetailScreenState extends State<PaperDetailScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Categories
+            // Sources & Categories
             Wrap(
               spacing: 6,
               runSpacing: 6,
-              children: paper.categories.map((cat) {
-                return Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                  decoration: BoxDecoration(
-                    color: context.colors.categoryColor(cat),
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                  child: Text(
-                    cat,
-                    style: context.typography.labelSmall?.copyWith(
-                      color: context.colors.categoryTextColor(cat),
-                      fontSize: 10,
+              children: [
+                if (paper.sources.isNotEmpty)
+                  ...paper.sources.map((s) => SourceBadge(source: s)),
+                ...paper.categories.map((cat) {
+                  return Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: context.colors.categoryColor(cat),
+                      borderRadius: BorderRadius.circular(4),
                     ),
-                  ),
-                );
-              }).toList(),
+                    child: Text(
+                      cat,
+                      style: context.typography.labelSmall?.copyWith(
+                        color: context.colors.categoryTextColor(cat),
+                        fontSize: 10,
+                      ),
+                    ),
+                  );
+                }),
+              ],
             ).animate().fadeIn(duration: 240.ms),
 
             const SizedBox(height: 16),
@@ -249,24 +254,29 @@ class _PaperDetailScreenState extends State<PaperDetailScreen> {
 
             const SizedBox(height: 16),
 
-            // Metadata row
-            Row(
+            // Metadata chips
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
               children: [
                 _MetaChip(label: 'Diterbitkan', value: paper.formattedDate),
-                const SizedBox(width: 12),
-                Expanded(child: _MetaChip(label: 'ID', value: paper.shortId)),
+                _MetaChip(label: 'ID', value: paper.shortId),
+                if (paper.citationCount != null && paper.citationCount! >= 0)
+                  _MetaChip(
+                    label: 'Sitasi',
+                    value: SourceBadge.formatCitationCount(paper.citationCount!),
+                  ),
+                if (paper.sources.isNotEmpty)
+                  _MetaChip(
+                    label: 'Sumber',
+                    value: paper.sources.join(', '),
+                  ),
+                if (paper.journalRef != null && paper.journalRef!.trim().isNotEmpty)
+                  _MetaChip(label: 'Journal', value: paper.journalRef!),
+                if (paper.doi != null && paper.doi!.trim().isNotEmpty)
+                  _MetaChip(label: 'DOI', value: paper.doi!),
               ],
             ),
-
-            if (paper.journalRef != null && paper.journalRef!.trim().isNotEmpty) ...[
-              const SizedBox(height: 8),
-              _MetaChip(label: 'Journal', value: paper.journalRef!),
-            ],
-
-            if (paper.doi != null && paper.doi!.trim().isNotEmpty) ...[
-              const SizedBox(height: 8),
-              _MetaChip(label: 'DOI', value: paper.doi!),
-            ],
 
             const SizedBox(height: 24),
             Container(height: 1, color: context.colors.borderSubtle),
@@ -400,13 +410,16 @@ class _MetaChip extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 2),
-          Text(
-            value,
-            style: GoogleFonts.jetBrainsMono(
-              fontSize: 11, color: context.colors.textSecondary,
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 240),
+            child: Text(
+              value,
+              style: GoogleFonts.jetBrainsMono(
+                fontSize: 11, color: context.colors.textSecondary,
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
             ),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
           ),
         ],
       ),
@@ -427,6 +440,7 @@ class _ActionButtons extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final bool hasDirectPdf = DynamicSourceButton.isDirectPdf(paper.pdfUrl);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -452,12 +466,16 @@ class _ActionButtons extends StatelessWidget {
                       children: [
                         Icon(Icons.chat_bubble_outline, size: 18, color: context.colors.surface0),
                         const SizedBox(width: 8),
-                        Text(
-                          'Tanya Paper',
-                          style: context.typography.labelMedium?.copyWith(
-                            color: context.colors.surface0,
-                            fontWeight: FontWeight.w600,
-                            fontSize: 14,
+                        Flexible(
+                          child: Text(
+                            'Tanya Paper',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: context.typography.labelMedium?.copyWith(
+                              color: context.colors.surface0,
+                              fontWeight: FontWeight.w600,
+                              fontSize: 14,
+                            ),
                           ),
                         ),
                       ],
@@ -490,12 +508,16 @@ class _ActionButtons extends StatelessWidget {
                       children: [
                         Icon(Icons.auto_stories_outlined, size: 18, color: context.colors.textPrimary),
                         const SizedBox(width: 8),
-                        Text(
-                          'Rangkum',
-                          style: context.typography.labelMedium?.copyWith(
-                            color: context.colors.textPrimary,
-                            fontWeight: FontWeight.w600,
-                            fontSize: 14,
+                        Flexible(
+                          child: Text(
+                            'Rangkum',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: context.typography.labelMedium?.copyWith(
+                              color: context.colors.textPrimary,
+                              fontWeight: FontWeight.w600,
+                              fontSize: 14,
+                            ),
                           ),
                         ),
                       ],
@@ -514,11 +536,11 @@ class _ActionButtons extends StatelessWidget {
             isPrimary: false,
             paper: paper,
           ),
-        if (paper.pdfUrl.isNotEmpty) ...[
+        if (paper.pdfUrl.isNotEmpty && (hasDirectPdf || paper.pdfUrl != paper.absUrl)) ...[
           if (paper.absUrl.isNotEmpty) const SizedBox(height: 10),
           DynamicSourceButton(
             url: paper.pdfUrl,
-            isPdfFallback: true,
+            isPdfFallback: hasDirectPdf,
             isFullWidth: true,
             isPrimary: false,
             paper: paper,

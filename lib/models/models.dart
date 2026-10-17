@@ -84,9 +84,67 @@ class ArxivPaper {
     sources: sources ?? this.sources,
   );
 
+  static String? normalizeDoi(String? raw) {
+    if (raw == null) return null;
+    var d = raw.trim();
+    if (d.isEmpty) return null;
+    d = d.replaceAll(RegExp(r'^https?:\/\/(dx\.)?doi\.org\/', caseSensitive: false), '');
+    d = d.replaceAll(RegExp(r'^doi:\s*', caseSensitive: false), '');
+    d = d.trim();
+    return d.isNotEmpty ? d : null;
+  }
+
+  static bool isAbstractUsable(String? summary) {
+    if (summary == null) return false;
+    final s = summary.trim().toLowerCase();
+    if (s.isEmpty) return false;
+    if (s.contains('tidak ada abstrak') ||
+        s.contains('no abstract available') ||
+        s.contains('abstrak tidak tersedia') ||
+        s.contains('tidak ada deskripsi') ||
+        s == 'abstract' ||
+        s == 'none' ||
+        s == 'n/a' ||
+        s == 'tidak tersedia') {
+      return false;
+    }
+    return s.length >= 20;
+  }
+
+  bool get hasUsableAbstract => isAbstractUsable(summary);
+
+
+  bool get isInternetArchive =>
+      absUrl.contains('archive.org') ||
+      sources.contains('Internet Archive') ||
+      categories.contains('Archive');
+
+  bool get isBook =>
+      categories.any((c) {
+        final cl = c.toLowerCase();
+        return cl == 'book' || cl == 'books' || cl == 'monograph';
+      }) ||
+      (journalRef != null &&
+          (journalRef!.toLowerCase().contains('isbn') ||
+              journalRef!.toLowerCase().contains('publisher') ||
+              journalRef!.toLowerCase().contains('press')));
+
+  bool get isArxiv =>
+      absUrl.contains('arxiv.org') ||
+      id.contains('arxiv.org') ||
+      pdfUrl.contains('arxiv.org') ||
+      sources.contains('arXiv') ||
+      (doi != null && doi!.toLowerCase().contains('arxiv'));
+
   String get primaryCategory => categories.isNotEmpty ? categories.first : 'Unknown';
 
-  String get shortId => id.replaceAll('http://arxiv.org/abs/', '');
+  String get shortId {
+    var s = id.trim();
+    s = s.replaceAll(RegExp(r'^https?:\/\/arxiv\.org\/(abs|pdf)\/', caseSensitive: false), '');
+    s = s.replaceAll(RegExp(r'^arxiv:\s*', caseSensitive: false), '');
+    s = s.replaceAll(RegExp(r'\.pdf$', caseSensitive: false), '');
+    return s;
+  }
 
   String get formattedDate {
     try {
@@ -112,56 +170,115 @@ class ArxivPaper {
   }
 
   String get bibtex {
-    final year = published.length >= 4 ? published.substring(0, 4) : 'unknown';
-    final cleanAuthors = authors.map(_cleanAuthor).toList();
-    final authorStr = cleanAuthors.join(' and ');
+    final year = RegExp(r'\d{4}').firstMatch(published)?.group(0) ?? 'unknown';
+    final cleanAuthors = authors.map(_cleanAuthor).where((a) => a.isNotEmpty).toList();
+    final authorStr = cleanAuthors.isNotEmpty ? cleanAuthors.join(' and ') : 'Unknown';
     
     String citeKey = 'paper$year';
-    if (cleanAuthors.isNotEmpty) {
-      final lastName = cleanAuthors.first.split(' ').last.replaceAll(RegExp(r'[^a-zA-Z]'), '');
-      citeKey = '$lastName$year';
+    final validFirstAuthor = cleanAuthors.firstWhere(
+      (a) => a.toLowerCase() != 'unknown',
+      orElse: () => '',
+    );
+    if (validFirstAuthor.isNotEmpty) {
+      final lastName = validFirstAuthor.split(' ').last.replaceAll(RegExp(r'[^a-zA-Z]'), '');
+      if (lastName.isNotEmpty) {
+        citeKey = '$lastName$year';
+      }
     }
 
-    final cleanTitle = title.replaceAll('\n', ' ');
-    final isArchiveOrg = absUrl.contains('archive.org');
+    final cleanTitle = title.replaceAll('\n', ' ').trim();
 
-    if (isArchiveOrg) {
-      return '''@book{$citeKey,
+    if (isInternetArchive) {
+      if (isBook) {
+        return '''@book{$citeKey,
   title={$cleanTitle},
   author={$authorStr},
   year={$year},
   url={$absUrl}
 }''';
-    } else {
+      } else {
+        return '''@misc{$citeKey,
+  title={$cleanTitle},
+  author={$authorStr},
+  year={$year},
+  url={$absUrl},
+  howpublished={Internet Archive}
+}''';
+      }
+    } else if (isArxiv) {
+      final eprint = shortId.isNotEmpty ? shortId : id;
+      final categoryLine = primaryCategory.isNotEmpty && primaryCategory != 'Unknown'
+          ? ',\n  primaryClass={$primaryCategory}'
+          : '';
+      final doiLine = (doi != null && doi!.isNotEmpty) ? ',\n  doi={$doi}' : '';
       return '''@article{$citeKey,
   title={$cleanTitle},
   author={$authorStr},
   year={$year},
   url={$absUrl},
-  eprint={$shortId},
-  archivePrefix={arXiv},
-  primaryClass={$primaryCategory}
+  eprint={$eprint},
+  archivePrefix={arXiv}$categoryLine$doiLine
 }''';
+    } else {
+      final buffer = StringBuffer();
+      buffer.writeln('@article{$citeKey,');
+      buffer.writeln('  title={$cleanTitle},');
+      buffer.writeln('  author={$authorStr},');
+      buffer.write('  year={$year}');
+      if (journalRef != null && journalRef!.trim().isNotEmpty) {
+        buffer.writeln(',');
+        buffer.write('  journal={${journalRef!.trim()}}');
+      }
+      if (doi != null && doi!.trim().isNotEmpty) {
+        buffer.writeln(',');
+        buffer.write('  doi={${doi!.trim()}}');
+      }
+      if (absUrl.trim().isNotEmpty) {
+        buffer.writeln(',');
+        buffer.write('  url={${absUrl.trim()}}');
+      }
+      buffer.writeln();
+      buffer.write('}');
+      return buffer.toString();
     }
   }
 
   String get apa {
-    final year = published.length >= 4 ? published.substring(0, 4) : 'n.d.';
-    final cleanAuthors = authors.map(_cleanAuthor).toList();
+    final year = RegExp(r'\d{4}').firstMatch(published)?.group(0) ?? 'n.d.';
+    final cleanAuthors = authors.map(_cleanAuthor).where((a) => a.isNotEmpty).toList();
     
-    String authorStr = cleanAuthors.join(', ');
+    String authorStr = cleanAuthors.isNotEmpty ? cleanAuthors.join(', ') : 'Unknown';
     if (cleanAuthors.length > 1) {
       final lastAuthor = cleanAuthors.last;
-      authorStr = cleanAuthors.sublist(0, cleanAuthors.length - 1).join(', ') + ', & ' + lastAuthor;
-    } else if (cleanAuthors.isNotEmpty) {
-      authorStr = cleanAuthors.first;
+      authorStr = '${cleanAuthors.sublist(0, cleanAuthors.length - 1).join(', ')}, & $lastAuthor';
     }
     
-    final cleanTitle = title.replaceAll('\n', ' ');
-    final isArchiveOrg = absUrl.contains('archive.org');
-    final sourceName = isArchiveOrg ? 'Internet Archive' : 'arXiv';
+    final cleanTitle = title.replaceAll('\n', ' ').trim();
 
-    return '$authorStr ($year). $cleanTitle. $sourceName. $absUrl';
+    String sourceName;
+    if (isInternetArchive) {
+      sourceName = 'Internet Archive';
+    } else if (journalRef != null && journalRef!.trim().isNotEmpty) {
+      sourceName = journalRef!.trim();
+    } else if (isArxiv) {
+      sourceName = 'arXiv';
+    } else {
+      sourceName = '';
+    }
+
+    final urlOrDoi = (doi != null && doi!.isNotEmpty && !absUrl.contains(doi!))
+        ? (absUrl.isNotEmpty ? '$absUrl. https://doi.org/$doi' : 'https://doi.org/$doi')
+        : (absUrl.isNotEmpty ? absUrl : (doi != null && doi!.isNotEmpty ? 'https://doi.org/$doi' : ''));
+
+    final buffer = StringBuffer();
+    buffer.write('$authorStr ($year). $cleanTitle.');
+    if (sourceName.isNotEmpty) {
+      buffer.write(' $sourceName.');
+    }
+    if (urlOrDoi.isNotEmpty) {
+      buffer.write(' $urlOrDoi');
+    }
+    return buffer.toString();
   }
 
   Map<String, dynamic> toJson() => {
@@ -191,7 +308,7 @@ class ArxivPaper {
     categories: List<String>.from(j['categories'] ?? []),
     pdfUrl: j['pdfUrl'] ?? '',
     absUrl: j['absUrl'] ?? '',
-    doi: j['doi'],
+    doi: normalizeDoi(j['doi'] as String?),
     journalRef: j['journalRef'],
     citationCount: j['citationCount'] as int?,
     referenceCount: j['referenceCount'] as int?,
@@ -215,6 +332,8 @@ class ChatMessage {
   final String? attachmentName; // user-uploaded file shown above the bubble
   final List<String> followUpSuggestions;
   final ChatErrorType? errorType;
+  final bool isTruncated;
+  final String? finishReason;
 
   const ChatMessage({
     required this.id,
@@ -226,6 +345,8 @@ class ChatMessage {
     this.attachmentName,
     this.followUpSuggestions = const [],
     this.errorType,
+    this.isTruncated = false,
+    this.finishReason,
   });
 
   ChatMessage copyWith({
@@ -234,6 +355,8 @@ class ChatMessage {
     List<ArxivPaper>? papers,
     List<String>? followUpSuggestions,
     ChatErrorType? errorType,
+    bool? isTruncated,
+    String? finishReason,
   }) => ChatMessage(
     id: id,
     role: role,
@@ -244,6 +367,8 @@ class ChatMessage {
     attachmentName: attachmentName,
     followUpSuggestions: followUpSuggestions ?? this.followUpSuggestions,
     errorType: errorType ?? this.errorType,
+    isTruncated: isTruncated ?? this.isTruncated,
+    finishReason: finishReason ?? this.finishReason,
   );
 
   bool get isUser => role == MessageRole.user;
@@ -259,6 +384,8 @@ class ChatMessage {
     'attachmentName': attachmentName,
     'followUpSuggestions': followUpSuggestions,
     'errorType': errorType?.toString(),
+    'isTruncated': isTruncated,
+    'finishReason': finishReason,
   };
 
   factory ChatMessage.fromJson(Map<String, dynamic> j) => ChatMessage(
@@ -276,6 +403,8 @@ class ChatMessage {
             (e) => e.toString() == j['errorType'],
             orElse: () => ChatErrorType.unknown,
           ),
+    isTruncated: j['isTruncated'] == true,
+    finishReason: j['finishReason'] as String?,
   );
 }
 

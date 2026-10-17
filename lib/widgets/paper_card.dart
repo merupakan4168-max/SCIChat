@@ -8,6 +8,7 @@ import '../models/models.dart';
 import '../theme/scichat_theme.dart';
 import 'dynamic_source_button.dart';
 import 'press_feedback.dart';
+import 'source_badge.dart';
 
 class PaperCard extends StatelessWidget {
   final ArxivPaper paper;
@@ -37,6 +38,7 @@ class PaperCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final bool hasDirectPdf = paper.pdfUrl.isNotEmpty && DynamicSourceButton.isDirectPdf(paper.pdfUrl);
     return Animate(
       effects: [
         FadeEffect(
@@ -79,8 +81,17 @@ class PaperCard extends StatelessWidget {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          // Categories
-                          _CategoryChips(categories: paper.categories.take(2).toList()),
+                          // Sources & Categories
+                          Wrap(
+                            spacing: 6,
+                            runSpacing: 4,
+                            children: [
+                              for (final src in paper.sources)
+                                SourceBadge(source: src),
+                              for (final cat in paper.categories.take(2))
+                                _CategoryChip(category: cat),
+                            ],
+                          ),
                           const SizedBox(height: 8),
                           // Title
                           Text(
@@ -139,23 +150,24 @@ class PaperCard extends StatelessWidget {
               ),
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 2, 16, 0),
-                child: Row(
+                child: Wrap(
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  spacing: 6,
+                  runSpacing: 2,
                   children: [
                     Text(
                       paper.formattedDate,
                       style: context.typography.labelSmall,
                     ),
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 6),
-                      child: Text(
-                        '•',
-                        style: TextStyle(
-                          fontSize: 10,
-                          color: context.colors.textMuted.withValues(alpha: 0.5),
-                        ),
+                    Text(
+                      '•',
+                      style: TextStyle(
+                        fontSize: 10,
+                        color: context.colors.textMuted.withValues(alpha: 0.5),
                       ),
                     ),
-                    Expanded(
+                    ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 160),
                       child: Text(
                         paper.shortId,
                         style: context.typography.labelSmall?.copyWith(
@@ -165,6 +177,33 @@ class PaperCard extends StatelessWidget {
                         overflow: TextOverflow.ellipsis,
                       ),
                     ),
+                    if (paper.citationCount != null && paper.citationCount! >= 0) ...[
+                      Text(
+                        '•',
+                        style: TextStyle(
+                          fontSize: 10,
+                          color: context.colors.textMuted.withValues(alpha: 0.5),
+                        ),
+                      ),
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.format_quote,
+                            size: 11,
+                            color: context.colors.textMuted,
+                          ),
+                          const SizedBox(width: 2),
+                          Text(
+                            SourceBadge.formatCitationCount(paper.citationCount!),
+                            style: context.typography.labelSmall?.copyWith(
+                              color: context.colors.textMuted,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -188,8 +227,8 @@ class PaperCard extends StatelessWidget {
                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                 child: Column(
                   children: [
-                    if ((onChatPdf != null && paper.pdfUrl.isNotEmpty) || onSummarize != null) ...[
-                      if (onChatPdf != null && paper.pdfUrl.isNotEmpty && onSummarize != null)
+                    if ((onChatPdf != null && hasDirectPdf) || onSummarize != null) ...[
+                      if (onChatPdf != null && hasDirectPdf && onSummarize != null)
                         Row(
                           children: [
                             Expanded(
@@ -209,11 +248,15 @@ class PaperCard extends StatelessWidget {
                                       children: [
                                         Icon(Icons.chat_bubble_outline, size: 14, color: context.colors.surface0),
                                         const SizedBox(width: 6),
-                                        Text(
-                                          'Tanya Paper',
-                                          style: context.typography.labelMedium?.copyWith(
-                                            color: context.colors.surface0,
-                                            fontWeight: FontWeight.w600,
+                                        Flexible(
+                                          child: Text(
+                                            'Tanya Paper',
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: context.typography.labelMedium?.copyWith(
+                                              color: context.colors.surface0,
+                                              fontWeight: FontWeight.w600,
+                                            ),
                                           ),
                                         ),
                                       ],
@@ -233,7 +276,7 @@ class PaperCard extends StatelessWidget {
                             ),
                           ],
                         )
-                      else if (onChatPdf != null && paper.pdfUrl.isNotEmpty)
+                      else if (onChatPdf != null && hasDirectPdf)
                         SizedBox(
                           width: double.infinity,
                           child: _PrimaryActionButton(onTap: onChatPdf!),
@@ -292,11 +335,15 @@ class PaperCard extends StatelessWidget {
                                 children: [
                                   Icon(Icons.format_quote, size: 14, color: context.colors.textPrimary),
                                   const SizedBox(width: 6),
-                                  Text(
-                                    'Kutip',
-                                    style: context.typography.labelMedium?.copyWith(
-                                      color: context.colors.textPrimary,
-                                      fontWeight: FontWeight.w600,
+                                  Flexible(
+                                    child: Text(
+                                      'Kutip',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: context.typography.labelMedium?.copyWith(
+                                        color: context.colors.textPrimary,
+                                        fontWeight: FontWeight.w600,
+                                      ),
                                     ),
                                   ),
                                 ],
@@ -309,7 +356,7 @@ class PaperCard extends StatelessWidget {
                           Expanded(
                             child: DynamicSourceButton(
                               url: paper.absUrl.isNotEmpty ? paper.absUrl : paper.pdfUrl,
-                              isPdfFallback: paper.absUrl.isEmpty,
+                              isPdfFallback: paper.absUrl.isEmpty && DynamicSourceButton.isDirectPdf(paper.pdfUrl),
                               isFullWidth: false,
                               isExpanded: true,
                               paper: paper,
@@ -335,6 +382,30 @@ class PaperCard extends StatelessWidget {
   }
 }
 
+class _CategoryChip extends StatelessWidget {
+  final String category;
+  const _CategoryChip({required this.category});
+
+  @override
+  Widget build(BuildContext context) {
+    final shortCat = category.length > 12 ? category.substring(0, 12) : category;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+      decoration: BoxDecoration(
+        color: context.colors.categoryColor(category),
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Text(
+        shortCat,
+        style: context.typography.labelSmall?.copyWith(
+          color: context.colors.categoryTextColor(category),
+          fontSize: 10,
+        ),
+      ),
+    );
+  }
+}
+
 class _CategoryChips extends StatelessWidget {
   final List<String> categories;
   const _CategoryChips({required this.categories});
@@ -344,23 +415,7 @@ class _CategoryChips extends StatelessWidget {
     return Wrap(
       spacing: 6,
       runSpacing: 4,
-      children: categories.map((cat) {
-        final shortCat = cat.length > 12 ? cat.substring(0, 12) : cat;
-        return Container(
-          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-          decoration: BoxDecoration(
-            color: context.colors.categoryColor(cat),
-            borderRadius: BorderRadius.circular(4),
-          ),
-          child: Text(
-            shortCat,
-            style: context.typography.labelSmall?.copyWith(
-              color: context.colors.categoryTextColor(cat),
-              fontSize: 10,
-            ),
-          ),
-        );
-      }).toList(),
+      children: categories.map((cat) => _CategoryChip(category: cat)).toList(),
     );
   }
 }
@@ -459,11 +514,15 @@ class _PrimaryActionButton extends StatelessWidget {
             children: [
               Icon(Icons.chat_bubble_outline, size: 14, color: context.colors.surface0),
               const SizedBox(width: 6),
-              Text(
-                'Tanya Paper',
-                style: context.typography.labelMedium?.copyWith(
-                  color: context.colors.surface0,
-                  fontWeight: FontWeight.w600,
+              Flexible(
+                child: Text(
+                  'Tanya Paper',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: context.typography.labelMedium?.copyWith(
+                    color: context.colors.surface0,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
               ),
             ],

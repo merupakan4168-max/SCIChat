@@ -30,6 +30,7 @@ class ChatBubble extends StatelessWidget {
   final Function(ArxivPaper)? onChatPdf;
   final Function(String)? onFollowUpTap;
   final VoidCallback? onRetry;
+  final VoidCallback? onContinue;
   final VoidCallback? onDismissError;
 
   const ChatBubble({
@@ -42,6 +43,7 @@ class ChatBubble extends StatelessWidget {
     this.onChatPdf,
     this.onFollowUpTap,
     this.onRetry,
+    this.onContinue,
     this.onDismissError,
   });
 
@@ -57,6 +59,7 @@ class ChatBubble extends StatelessWidget {
       onChatPdf: onChatPdf,
       onFollowUpTap: onFollowUpTap,
       onRetry: onRetry,
+      onContinue: onContinue,
       onDismissError: onDismissError,
     );
   }
@@ -151,6 +154,7 @@ class _AssistantBubble extends StatelessWidget {
   final Function(ArxivPaper)? onChatPdf;
   final Function(String)? onFollowUpTap;
   final VoidCallback? onRetry;
+  final VoidCallback? onContinue;
   final VoidCallback? onDismissError;
 
   const _AssistantBubble({
@@ -162,6 +166,7 @@ class _AssistantBubble extends StatelessWidget {
     this.onChatPdf,
     this.onFollowUpTap,
     this.onRetry,
+    this.onContinue,
     this.onDismissError,
   });
 
@@ -224,6 +229,10 @@ class _AssistantBubble extends StatelessWidget {
                         message.errorType != ChatErrorType.authentication
                     ? onRetry
                     : null,
+                onContinue: message.content.isNotEmpty &&
+                        message.errorType != ChatErrorType.authentication
+                    ? onContinue
+                    : null,
                 onDismiss: onDismissError,
               ),
             ] else ...[
@@ -254,6 +263,18 @@ class _AssistantBubble extends StatelessWidget {
                     ],
                   ),
                 ),
+              if (message.status == MessageStatus.done &&
+                  message.isTruncated &&
+                  message.finishReason != 'cancelled') ...[
+                const SizedBox(height: 10),
+                _TruncatedContinuationBanner(
+                  onContinue: onContinue,
+                ),
+              ] else if (message.status == MessageStatus.done &&
+                  message.finishReason == 'cancelled') ...[
+                const SizedBox(height: 10),
+                const _CancelledGenerationBanner(),
+              ],
             ],
 
             // Attached papers / sources section
@@ -679,12 +700,14 @@ class _ErrorMessage extends StatelessWidget {
   final ChatErrorType? errorType;
   final bool hasPartialResponse;
   final VoidCallback? onRetry;
+  final VoidCallback? onContinue;
   final VoidCallback? onDismiss;
 
   const _ErrorMessage({
     required this.errorType,
     required this.hasPartialResponse,
     this.onRetry,
+    this.onContinue,
     this.onDismiss,
   });
 
@@ -692,7 +715,7 @@ class _ErrorMessage extends StatelessWidget {
     if (hasPartialResponse) {
       return (
         title: 'Respons terputus',
-        description: 'Sebagian respons berhasil diterima. Kami tidak mengirim ulang agar jawabannya tidak ganda.',
+        description: 'Sebagian respons berhasil diterima. Kamu dapat melanjutkan jawaban ini (kelanjutan dihasilkan oleh model AI dan disesuaikan dengan konteks).',
       );
     }
     switch (errorType) {
@@ -759,11 +782,17 @@ class _ErrorMessage extends StatelessWidget {
                     color: context.colors.textSecondary,
                   ),
                 ),
-                if (onRetry != null || onDismiss != null) ...[
+                if (onRetry != null || onContinue != null || onDismiss != null) ...[
                   const SizedBox(height: 6),
                   Wrap(
                     spacing: 4,
                     children: [
+                      if (onContinue != null)
+                        TextButton.icon(
+                          onPressed: onContinue,
+                          icon: const Icon(Icons.arrow_forward, size: 16),
+                          label: const Text('Lanjutkan jawaban'),
+                        ),
                       if (onRetry != null)
                         TextButton.icon(
                           onPressed: onRetry,
@@ -780,6 +809,98 @@ class _ErrorMessage extends StatelessWidget {
                   ),
                 ],
               ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TruncatedContinuationBanner extends StatelessWidget {
+  final VoidCallback? onContinue;
+
+  const _TruncatedContinuationBanner({this.onContinue});
+
+  @override
+  Widget build(BuildContext context) {
+    final accentColor = context.colors.accent;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: accentColor.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: accentColor.withValues(alpha: 0.3)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.info_outline, size: 18, color: accentColor),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Respons mencapai batas panjang token',
+                  style: context.typography.labelLarge?.copyWith(
+                    color: context.colors.textPrimary,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Jawaban ini terpotong sebelum selesai. Kamu dapat melanjutkan jawaban (kelanjutan merupakan respons generatif model yang disesuaikan dengan konteks).',
+            style: context.typography.bodySmall?.copyWith(
+              color: context.colors.textSecondary,
+              fontSize: 12,
+            ),
+          ),
+          if (onContinue != null) ...[
+            const SizedBox(height: 6),
+            TextButton.icon(
+              onPressed: onContinue,
+              icon: const Icon(Icons.arrow_forward, size: 16),
+              label: const Text('Lanjutkan respons'),
+              style: TextButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _CancelledGenerationBanner extends StatelessWidget {
+  const _CancelledGenerationBanner();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: context.colors.surface3.withValues(alpha: 0.5),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: context.colors.borderSubtle),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.stop_circle_outlined, size: 16, color: context.colors.textMuted),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'Generasi dihentikan oleh pengguna',
+              style: context.typography.bodySmall?.copyWith(
+                color: context.colors.textSecondary,
+                fontSize: 12,
+              ),
             ),
           ),
         ],

@@ -10,6 +10,11 @@ class GeminiService {
   final http.Client? _client;
   String? _resolvedModel;
   final String _baseUrl;
+  String? _lastStreamFinishReason;
+
+  String? get lastStreamFinishReason => _lastStreamFinishReason;
+  @visibleForTesting
+  set lastStreamFinishReason(String? value) => _lastStreamFinishReason = value;
 
   GeminiService({
     required this.apiKey,
@@ -116,8 +121,70 @@ Peranmu:
 - Jawablah dengan singkat namun lengkap. Gunakan struktur dan bagian yang jelas saat merangkum makalah.
 - Jika tidak ada makalah yang ditemukan, tetap berikan jawaban umum yang membantu dan sarankan strategi pencarian.
 - Jangan pernah mengarang judul, penulis, atau doi — hanya rujuk apa yang diberikan.
+
+Integritas Konteks & Referensi Multi-Turn:
+- Rujukan seperti "paper kedua tadi", "makalah pertama", "paper 3", atau "paper tersebut" merujuk secara pasti pada nomor urut paper ("Paper 1", "Paper 2", dst.) di blok [RETRIEVED PAPERS] yang diberikan pada giliran sebelumnya atau giliran aktif. Selalu identifikasi kembali paper yang dimaksud secara spesifik (sebutkan judul, penulis, tahun, dan DOI bila ada).
+- Gunakan rekaman metadata resmi pada [RETRIEVED PAPERS] (judul, penulis, tahun, DOI, URL, abstrak) sebagai sumber kebenaran (ground truth), bukan sekadar teks bebas dari respons AI sebelumnya.
+- Pembedaan Informasi & Anti-Halusinasi:
+  1. Informasi yang tersedia: Rujuk fakta, metodologi, dan temuan yang secara eksplisit tertulis dalam abstrak atau teks yang diberikan.
+  2. Informasi yang tidak tersedia: Jika pengguna menanyakan detail (seperti parameter arsitektur spesifik, dataset khusus, atau angka kuantitatif) yang TIDAK tertulis dalam abstrak atau kutipan teks yang tersedia, nyatakan secara jujur dan transparan bahwa detail tersebut tidak tercantum dalam abstrak yang tersedia, alih-alih mengarangnya.
+  3. Inferensi: Jika kamu membuat analisis, deduksi, atau hipotesis yang melampaui teks langsung, nyatakan secara eksplisit sebagai "inferensi" atau "analisis logis", bukan sebagai fakta yang diklaim oleh penulis paper.
+  4. Naskah Tanpa Bukti: Jika pada [RETRIEVED PAPERS] tercantum "Abstract: Abstrak tidak tersedia" dan tidak ada "Full text excerpt", dilarang keras mengarang metodologi penelitian, temuan eksperimen, atau angka statistik seolah-olah terverifikasi dari isi paper. Nyatakan secara jujur bahwa abstrak maupun naskah dokumen tidak tersedia, dan jangan berasumsi di luar metadata judul dan pengarang.
+
 Gunakan Bahasa Indonesia dalam setiap jawabanmu.
 ''';
+
+  @visibleForTesting
+  static String formatPapersContext(
+    List<ArxivPaper> papers, {
+    Map<String, String> fullTexts = const {},
+  }) {
+    if (papers.isEmpty) return '';
+    final buffer = StringBuffer('\n\n[RETRIEVED PAPERS]\n');
+    for (int i = 0; i < papers.length; i++) {
+      final p = papers[i];
+      final fullText = fullTexts[p.id];
+      final doiStr = (p.doi != null && p.doi!.trim().isNotEmpty) ? p.doi!.trim() : 'Tidak tersedia';
+      final authorsStr = p.authors.isEmpty
+          ? 'Penulis tidak diketahui'
+          : '${p.authors.take(5).join(', ')}${p.authors.length > 5 ? ' et al.' : ''}';
+
+      buffer.writeln('Paper ${i + 1}:');
+      buffer.writeln('Source: ${sourceLabel(p)}');
+      buffer.writeln('Title: ${p.title}');
+      buffer.writeln('Authors: $authorsStr');
+      buffer.writeln('Published: ${p.formattedDate}');
+      buffer.writeln('Category: ${p.primaryCategory}');
+      buffer.writeln('ID: ${p.shortId}');
+      buffer.writeln('DOI: $doiStr');
+      buffer.writeln('URL: ${p.absUrl}');
+      final abstractStr = ArxivPaper.isAbstractUsable(p.summary) ? p.summary.trim() : 'Abstrak tidak tersedia';
+      buffer.writeln('Abstract: $abstractStr');
+      if (fullText != null && fullText.trim().isNotEmpty) {
+        buffer.writeln('Full text excerpt:\n$fullText');
+      }
+      buffer.writeln('---');
+    }
+    buffer.writeln('[END OF RETRIEVED PAPERS]');
+    return buffer.toString();
+  }
+
+  @visibleForTesting
+  List<Map<String, String>> buildChatMessages({
+    required List<ChatMessage> history,
+    required String userMessage,
+    List<ArxivPaper> papers = const [],
+    Map<String, String> fullTexts = const {},
+    bool eli5Mode = false,
+    AiSkill skill = AiSkill.none,
+  }) => _buildChatMessages(
+    history: history,
+    userMessage: userMessage,
+    papers: papers,
+    fullTexts: fullTexts,
+    eli5Mode: eli5Mode,
+    skill: skill,
+  );
 
   List<Map<String, String>> _buildChatMessages({
     required List<ChatMessage> history,
@@ -127,28 +194,6 @@ Gunakan Bahasa Indonesia dalam setiap jawabanmu.
     bool eli5Mode = false,
     AiSkill skill = AiSkill.none,
   }) {
-    String context = '';
-    if (papers.isNotEmpty) {
-      context = '\n\n[RETRIEVED PAPERS]\n';
-      for (int i = 0; i < papers.length; i++) {
-        final p = papers[i];
-        final fullText = fullTexts[p.id];
-        context += '''
-Paper ${i + 1}:
-Source: ${sourceLabel(p)}
-Title: ${p.title}
-Authors: ${p.authors.take(5).join(', ')}${p.authors.length > 5 ? ' et al.' : ''}
-Published: ${p.formattedDate}
-Category: ${p.primaryCategory}
-ID: ${p.shortId}
-URL: ${p.absUrl}
-Abstract: ${p.summary}
-${fullText != null ? 'Full text excerpt:\n$fullText\n' : ''}---
-''';
-      }
-      context += '[END OF RETRIEVED PAPERS]\n';
-    }
-
     final messages = <Map<String, String>>[];
     final eli5Instruction = eli5Mode 
         ? "\n\nPENTING: Mode 'Jelaskan Seperti Anak 5 Tahun' (ELI5) AKTIF. Jelaskan seluruh konsep ilmiah sesederhana mungkin menggunakan analogi kehidupan sehari-hari. JANGAN gunakan jargon akademis sama sekali."
@@ -156,13 +201,72 @@ ${fullText != null ? 'Full text excerpt:\n$fullText\n' : ''}---
     final skillInstruction = skill.systemPrompt;
     messages.add({'role': 'system', 'content': _systemPrompt + eli5Instruction + skillInstruction});
 
-    final recentHistory = history.length > 20 ? history.sublist(history.length - 20) : history;
-    for (final msg in recentHistory) {
-      if (msg.role == MessageRole.system) continue;
-      messages.add({'role': msg.isUser ? 'user' : 'assistant', 'content': msg.content});
+    // If history already ends with the pending user message, exclude it from recentHistory
+    List<ChatMessage> effectiveHistory = history;
+    if (effectiveHistory.isNotEmpty &&
+        effectiveHistory.last.isUser &&
+        effectiveHistory.last.content.trim() == userMessage.trim()) {
+      effectiveHistory = effectiveHistory.sublist(0, effectiveHistory.length - 1);
     }
 
-    final fullMessage = papers.isNotEmpty ? '$context\nPertanyaan pengguna: $userMessage' : userMessage;
+    final recentHistory = effectiveHistory.length > 20
+        ? effectiveHistory.sublist(effectiveHistory.length - 20)
+        : effectiveHistory;
+
+    final includedPaperIds = <String>{};
+
+    // Track papers already present in stored message content to prevent duplicate context
+    for (final msg in recentHistory) {
+      if (msg.content.contains('[RETRIEVED PAPERS]')) {
+        for (final p in msg.papers) {
+          includedPaperIds.add(p.id);
+        }
+      }
+    }
+
+    // Build history turns, ensuring papers from prior turns remain available
+    for (int i = 0; i < recentHistory.length; i++) {
+      final msg = recentHistory[i];
+      if (msg.role == MessageRole.system) continue;
+
+      if (msg.isUser) {
+        // Associate papers retrieved in this turn (stored on following assistant message or user message)
+        List<ArxivPaper> turnPapers = const [];
+        if (i + 1 < recentHistory.length && recentHistory[i + 1].isAssistant) {
+          turnPapers = recentHistory[i + 1].papers;
+        } else if (msg.papers.isNotEmpty) {
+          turnPapers = msg.papers;
+        }
+
+        final unincludedPapers = turnPapers.where((p) => !includedPaperIds.contains(p.id)).toList();
+        if (unincludedPapers.isNotEmpty && !msg.content.contains('[RETRIEVED PAPERS]')) {
+          for (final p in unincludedPapers) {
+            includedPaperIds.add(p.id);
+          }
+          final papersBlock = formatPapersContext(unincludedPapers);
+          final content = '$papersBlock\n\nPertanyaan pengguna: ${msg.content}';
+          messages.add({'role': 'user', 'content': content});
+        } else {
+          messages.add({'role': 'user', 'content': msg.content});
+        }
+      } else {
+        messages.add({'role': 'assistant', 'content': msg.content});
+      }
+    }
+
+    // For current turn:
+    final unincludedCurrentPapers = papers.where((p) => !includedPaperIds.contains(p.id)).toList();
+    String context = '';
+    if (unincludedCurrentPapers.isNotEmpty) {
+      for (final p in unincludedCurrentPapers) {
+        includedPaperIds.add(p.id);
+      }
+      context = formatPapersContext(unincludedCurrentPapers, fullTexts: fullTexts);
+    }
+
+    final fullMessage = context.isNotEmpty
+        ? '$context\nPertanyaan pengguna: $userMessage'
+        : userMessage;
     messages.add({'role': 'user', 'content': fullMessage});
     return messages;
   }
@@ -231,11 +335,69 @@ ${fullText != null ? 'Full text excerpt:\n$fullText\n' : ''}---
       'stream': true,
     });
 
+    yield* _executeStreamRequest(
+      body: body,
+      model: model,
+      inactivityTimeout: inactivityTimeout,
+      debugLabel: 'stream',
+    );
+  }
+
+  Stream<String> continueChatStream({
+    required List<ChatMessage> history,
+    required String userMessage,
+    required String partialAssistantResponse,
+    List<ArxivPaper> papers = const [],
+    Map<String, String> fullTexts = const {},
+    bool eli5Mode = false,
+    AiSkill skill = AiSkill.none,
+    Duration inactivityTimeout = const Duration(seconds: 15),
+  }) async* {
+    final messages = _buildChatMessages(
+      history: history,
+      userMessage: userMessage,
+      papers: papers,
+      fullTexts: fullTexts,
+      eli5Mode: eli5Mode,
+      skill: skill,
+    );
+
+    // Sisipkan respons asisten yang terpotong dan instruksi kelanjutan eksplisit
+    messages.add({'role': 'assistant', 'content': partialAssistantResponse});
+    messages.add({
+      'role': 'user',
+      'content': 'Lanjutkan respons di atas persis dari titik terakhir tanpa mengulang teks yang sudah ditulis sebelumnya.',
+    });
+
+    final model = await _getModel();
+    final body = jsonEncode({
+      'model': model,
+      'messages': messages,
+      'temperature': 0.7,
+      'max_tokens': 2048,
+      'stream': true,
+    });
+
+    yield* _executeStreamRequest(
+      body: body,
+      model: model,
+      inactivityTimeout: inactivityTimeout,
+      debugLabel: 'continue stream',
+    );
+  }
+
+  Stream<String> _executeStreamRequest({
+    required String body,
+    required String model,
+    required Duration inactivityTimeout,
+    required String debugLabel,
+  }) async* {
     final client = _client ?? http.Client();
     final shouldClose = _client == null;
     final connectStopwatch = Stopwatch()..start();
     int chunkCount = 0;
     int totalChars = 0;
+    _lastStreamFinishReason = null;
 
     try {
       final request = http.Request('POST', Uri.parse('$_baseUrl/chat/completions'));
@@ -245,23 +407,23 @@ ${fullText != null ? 'Full text excerpt:\n$fullText\n' : ''}---
       });
       request.body = body;
 
-      debugPrint('[AI_DEBUG] Mengirim request stream ke model: $model');
+      debugPrint('[AI_DEBUG] Mengirim request $debugLabel ke model: $model');
 
       // Naikkan batas waktu koneksi awal ke 45 detik untuk menangani prefill kueri berkonteks besar
       final streamedResponse = await client.send(request).timeout(
         const Duration(seconds: 45),
-        onTimeout: () => throw TimeoutException('Batas waktu koneksi awal stream (45 detik) terlampaui.'),
+        onTimeout: () => throw TimeoutException('Batas waktu koneksi awal $debugLabel (45 detik) terlampaui.'),
       );
 
       final connectDurationMs = connectStopwatch.elapsedMilliseconds;
-      debugPrint('[AI_DEBUG] Respons HTTP awal diterima dalam ${connectDurationMs}ms (Status: ${streamedResponse.statusCode})');
+      debugPrint('[AI_DEBUG] Respons HTTP awal $debugLabel diterima dalam ${connectDurationMs}ms (Status: ${streamedResponse.statusCode})');
 
       if (streamedResponse.statusCode != 200) {
         final errBody = await streamedResponse.stream.bytesToString().timeout(
           const Duration(seconds: 5),
           onTimeout: () => '',
         );
-        debugPrint('[AI_DEBUG] Stream respons HTTP non-200, panjang error body: ${errBody.length}');
+        debugPrint('[AI_DEBUG] $debugLabel respons HTTP non-200, panjang error body: ${errBody.length}');
         try {
           final errJson = jsonDecode(errBody);
           throw Exception(errJson['error']?['message'] ?? 'Kesalahan API Agnes ${streamedResponse.statusCode}');
@@ -278,7 +440,7 @@ ${fullText != null ? 'Full text excerpt:\n$fullText\n' : ''}---
             inactivityTimeout,
             onTimeout: (sink) {
               sink.addError(TimeoutException(
-                'Batas waktu inaktivitas stream (${inactivityTimeout.inSeconds} detik) terlampaui.',
+                'Batas waktu inaktivitas $debugLabel (${inactivityTimeout.inSeconds} detik) terlampaui.',
               ));
               sink.close();
             },
@@ -319,6 +481,11 @@ ${fullText != null ? 'Full text excerpt:\n$fullText\n' : ''}---
             if (choices is List && choices.isNotEmpty) {
               final firstChoice = choices[0];
               if (firstChoice is Map) {
+                final finishReason = firstChoice['finish_reason'];
+                if (finishReason is String && finishReason.isNotEmpty) {
+                  _lastStreamFinishReason = finishReason;
+                  debugPrint('[AI_DEBUG] Stream finish_reason terdeteksi: $finishReason');
+                }
                 final delta = firstChoice['delta'];
                 if (delta is Map) {
                   final content = delta['content'];
@@ -334,9 +501,12 @@ ${fullText != null ? 'Full text excerpt:\n$fullText\n' : ''}---
         }
       }
 
-      debugPrint('[AI_DEBUG] Stream selesai normal. Total event: $chunkCount, Total karakter: $totalChars');
+      if (_lastStreamFinishReason == null && chunkCount > 0) {
+        _lastStreamFinishReason = 'stop';
+      }
+      debugPrint('[AI_DEBUG] $debugLabel selesai normal. Total event: $chunkCount, Total karakter: $totalChars');
     } catch (e) {
-      debugPrint('[AI_DEBUG] Stream keluar dengan error: ${e.runtimeType}');
+      debugPrint('[AI_DEBUG] $debugLabel keluar dengan error: ${e.runtimeType}');
       rethrow;
     } finally {
       if (shouldClose) {

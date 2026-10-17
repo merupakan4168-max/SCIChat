@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:xml/xml.dart';
@@ -9,6 +11,13 @@ class _ArchiveFiles {
   final String? pdfUrl;
   final String? textUrl; // OCR plain text (_djvu.txt)
   const _ArchiveFiles({this.pdfUrl, this.textUrl});
+}
+
+class _ScoredPaper {
+  final ArxivPaper paper;
+  final double score;
+  final int originalIndex;
+  const _ScoredPaper(this.paper, this.score, this.originalIndex);
 }
 
 /// Per-search diagnostic snapshot. Contains only counts, source names and
@@ -46,6 +55,10 @@ class SearchService {
   static const _archiveMetadataBase = 'https://archive.org/metadata';
   static const _archiveFtsBase = 'https://be-api.us.archive.org/ia-pub-fts-api';
 
+  /// Polite identity headers for Crossref, OpenAlex, and public literature APIs.
+  static const appUserAgent = 'SCIChat/1.0 (https://github.com/merupakan4168-max/SCIChat; mailto:mssodikinns@gmail.com)';
+  static const politeEmail = 'mssodikinns@gmail.com';
+
   /// Category label used to tag Internet Archive results.
   static const archiveCategory = 'Archive';
 
@@ -60,12 +73,17 @@ class SearchService {
   static const semanticScholarSource = 'Semantic Scholar';
 
   final http.Client? _client;
+  final Future<void> Function(Duration) _delay;
   final Map<String, _ArchiveFiles> _archiveFilesCache = {};
 
   /// Diagnostics of the most recent [search] call.
   SearchDiagnostics lastDiagnostics = SearchDiagnostics();
 
-  SearchService({http.Client? client}) : _client = client;
+  SearchService({
+    http.Client? client,
+    Future<void> Function(Duration)? delay,
+  })  : _client = client,
+        _delay = delay ?? Future.delayed;
 
   static String? _labelForHost(String host) {
     if (host.contains('arxiv.org')) return arxivSource;
@@ -76,27 +94,151 @@ class SearchService {
     return null;
   }
 
-  Future<http.Response> _get(Uri uri, {Map<String, String>? headers}) async {
+  Map<String, String> _buildHeaders({Map<String, String>? extra}) {
+    final h = <String, String>{'User-Agent': appUserAgent};
+    if (extra != null) h.addAll(extra);
+    return h;
+  }
+
+  Duration? _parseRetryAfter(String? header) {
+    if (header == null) return null;
+    final trimmed = header.trim();
+    if (trimmed.isEmpty) return null;
+    final seconds = int.tryParse(trimmed);
+    if (seconds != null && seconds >= 0) {
+      return Duration(seconds: seconds);
+    }
+    final date = DateTime.tryParse(trimmed);
+    if (date != null) {
+      final diff = date.difference(DateTime.now());
+      if (!diff.isNegative) return diff;
+    }
+    return null;
+  }
+
+  Future<http.Response> _get(
+    Uri uri, {
+    Map<String, String>? headers,
+    Duration timeout = const Duration(seconds: 15),
+    int maxRetries = 2,
+    Duration initialDelay = const Duration(milliseconds: 250),
+  }) async {
     final label = _labelForHost(uri.host);
-    try {
-      final response = _client != null
-          ? await _client!.get(uri, headers: headers)
-          : await http.get(uri, headers: headers);
-      if (label != null) {
-        lastDiagnostics.httpStatus[label] = response.statusCode.toString();
+    int attempts = 0;
+    Duration currentDelay = initialDelay;
+
+    while (true) {
+      attempts++;
+      try {
+        final reqHeaders = _buildHeaders(extra: headers);
+        final future = _client != null
+            ? _client!.get(uri, headers: reqHeaders)
+            : http.get(uri, headers: reqHeaders);
+        final response = await future.timeout(timeout);
+
+        final status = response.statusCode;
+        final isTransient = (status == 429 || status == 503 || status == 502 || status == 504);
+
+        if (isTransient && attempts <= maxRetries) {
+          Duration waitDuration = currentDelay;
+          final retryAfter = _parseRetryAfter(response.headers['retry-after']);
+          if (retryAfter != null) {
+            if (retryAfter.inSeconds > 5) {
+              // Retry-After is too long for interactive search; abort retry
+              if (label != null) {
+                lastDiagnostics.httpStatus[label] = status.toString();
+              }
+              return response;
+            }
+            waitDuration = retryAfter;
+          }
+          if (label != null) {
+            lastDiagnostics.httpStatus[label] = status.toString();
+          }
+          await _delay(waitDuration);
+          currentDelay *= 2;
+          continue;
+        }
+
+        if (label != null) {
+          lastDiagnostics.httpStatus[label] = status.toString();
+        }
+        return response;
+      } catch (e) {
+        final isTransientError = e is TimeoutException ||
+            e is http.ClientException ||
+            e.toString().contains('SocketException') ||
+            e.toString().contains('Connection');
+
+        if (isTransientError && attempts <= maxRetries) {
+          await _delay(currentDelay);
+          currentDelay *= 2;
+          continue;
+        }
+
+        if (label != null) {
+          lastDiagnostics.httpStatus[label] = 'error:${e.runtimeType}';
+        }
+        rethrow;
       }
-      return response;
-    } catch (e) {
-      if (label != null) {
-        lastDiagnostics.httpStatus[label] = 'error:${e.runtimeType}';
-      }
-      rethrow;
     }
   }
 
-  Future<http.Response> _post(Uri uri, {Map<String, String>? headers, Object? body}) {
-    if (_client != null) return _client!.post(uri, headers: headers, body: body);
-    return http.post(uri, headers: headers, body: body);
+  Future<http.Response> _post(
+    Uri uri, {
+    Map<String, String>? headers,
+    Object? body,
+    Duration timeout = const Duration(seconds: 30),
+    int maxRetries = 2,
+    Duration initialDelay = const Duration(milliseconds: 250),
+  }) async {
+    final label = _labelForHost(uri.host);
+    int attempts = 0;
+    Duration currentDelay = initialDelay;
+
+    while (true) {
+      attempts++;
+      try {
+        final reqHeaders = _buildHeaders(extra: headers);
+        final future = _client != null
+            ? _client!.post(uri, headers: reqHeaders, body: body)
+            : http.post(uri, headers: reqHeaders, body: body);
+        final response = await future.timeout(timeout);
+
+        final status = response.statusCode;
+        final isTransient = (status == 429 || status == 503 || status == 502 || status == 504);
+
+        if (isTransient && attempts <= maxRetries) {
+          if (label != null) {
+            lastDiagnostics.httpStatus[label] = status.toString();
+          }
+          await _delay(currentDelay);
+          currentDelay *= 2;
+          continue;
+        }
+
+        if (label != null) {
+          lastDiagnostics.httpStatus[label] = status.toString();
+        }
+        return response;
+      } catch (e) {
+        final isTransientError = e is TimeoutException ||
+            e is http.ClientException ||
+            e.toString().contains('SocketException') ||
+            e.toString().contains('Connection');
+
+        if (isTransientError && attempts <= maxRetries) {
+          await _delay(currentDelay);
+          currentDelay *= 2;
+          continue;
+        }
+
+        if (label != null) {
+          lastDiagnostics.httpStatus[label] = 'error:${e.runtimeType}';
+        }
+        rethrow;
+      }
+    }
   }
 
   static List<ArxivPaper> _tag(List<ArxivPaper> list, String label) =>
@@ -139,23 +281,18 @@ class SearchService {
     return k;
   }
 
-  /// Number of distinct papers across [lists] using the same dedupe keys as the
+  /// Number of distinct papers across [lists] using the same dedupe rules as the
   /// merge (uncapped; used for diagnostics only).
   int _countUnique(List<List<ArxivPaper>> lists) {
-    final seen = <String>{};
-    int unique = 0;
+    final unique = <ArxivPaper>[];
     for (final list in lists) {
       for (final p in list) {
-        final keys = _dedupeKeys(p);
-        if (keys.any(seen.contains)) {
-          seen.addAll(keys);
-        } else {
-          seen.addAll(keys);
-          unique++;
+        if (!unique.any((u) => canMerge(u, p))) {
+          unique.add(p);
         }
       }
     }
-    return unique;
+    return unique.length;
   }
 
   /// Searches arXiv, CrossRef, OpenAlex, Semantic Scholar and Internet Archive in parallel.
@@ -235,33 +372,24 @@ class SearchService {
 
     // Round-robin merge so every source is represented, with metadata enrichment.
     final merged = <ArxivPaper>[];
-    final keyToMergedIndex = <String, int>{};
     final maxLen = results.fold<int>(0, (m, l) => l.length > m ? l.length : m);
     for (int i = 0; i < maxLen && merged.length < totalLimit; i++) {
       for (final list in results) {
         if (i >= list.length) continue;
         final p = list[i];
-        final keys = _dedupeKeys(p);
 
-        int? matchIdx;
-        for (final k in keys) {
-          if (keyToMergedIndex.containsKey(k)) {
-            matchIdx = keyToMergedIndex[k];
+        int matchIdx = -1;
+        for (int m = 0; m < merged.length; m++) {
+          if (canMerge(merged[m], p)) {
+            matchIdx = m;
             break;
           }
         }
 
-        if (matchIdx != null) {
+        if (matchIdx != -1) {
           // Enrich the existing entry with missing/better metadata
           merged[matchIdx] = _enrichPaper(merged[matchIdx], p);
-          for (final k in keys) {
-            keyToMergedIndex[k] = matchIdx;
-          }
         } else if (merged.length < totalLimit) {
-          final newIdx = merged.length;
-          for (final k in keys) {
-            keyToMergedIndex[k] = newIdx;
-          }
           merged.add(p);
         }
       }
@@ -272,9 +400,12 @@ class SearchService {
       merged.sort((a, b) => _compareDate(b.published, a.published));
     } else if (filter.sortBy == 'lastUpdatedDate') {
       merged.sort((a, b) => _compareDate(b.updated, a.updated));
+    } else if (onlySource == null) {
+      final ranked = rankPapersByRelevance(merged, plain.isNotEmpty ? plain : query);
+      merged
+        ..clear()
+        ..addAll(ranked);
     }
-    // 'relevance': keep round-robin order (each source returns its own
-    // relevance-sorted results; no unified cross-source ranking is available).
     for (final p in merged) {
       for (final s in p.sources) {
         diag.finalPerSource[s] = (diag.finalPerSource[s] ?? 0) + 1;
@@ -282,6 +413,134 @@ class SearchService {
     }
     if (kDebugMode) debugPrint('[SEARCH_DIAG] $diag');
     return merged;
+  }
+
+  static const _stopWords = <String>{
+    // English
+    'a', 'an', 'the', 'and', 'or', 'of', 'in', 'on', 'at', 'to', 'for',
+    'with', 'by', 'from', 'about', 'as', 'into', 'like', 'through', 'after',
+    'over', 'between', 'out', 'against', 'during', 'without', 'before',
+    'under', 'around', 'among', 'is', 'are', 'was', 'were', 'be', 'been',
+    'being', 'have', 'has', 'had', 'do', 'does', 'did', 'this', 'that',
+    'these', 'those', 'it', 'its', 'can', 'could', 'will', 'would', 'should',
+    'effect', 'effects', 'affect', 'affects', 'study', 'studies', 'paper', 'papers',
+    // Indonesian
+    'dan', 'atau', 'dari', 'ke', 'di', 'pada', 'untuk', 'dengan', 'yang',
+    'ini', 'itu', 'tentang', 'adalah', 'sebagai', 'dalam', 'oleh', 'olehnya',
+    'antara', 'setelah', 'sebelum', 'tanpa', 'terhadap', 'bisa', 'dapat',
+    'efek', 'pengaruh', 'studi', 'kajian',
+  };
+
+  /// Computes a deterministic local relevance score for [paper] against [query].
+  ///
+  /// Criteria:
+  /// - Exact phrase in title (dominant): +100 to +170 pts.
+  /// - Keywords in title: +25 pts per token, up to +30 coverage bonus.
+  /// - Exact phrase in abstract: +20 pts.
+  /// - Keywords in abstract: up to 9 pts per token, +15 coverage bonus.
+  /// - Stop words are filtered out to prevent false matches on generic words.
+  /// - PDF availability gives 0 bonus.
+  /// - Citations & recency give minor tie-breaker bonus (max 4 pts) ONLY if relevance > 0.
+  static double computeRelevanceScore(ArxivPaper paper, String query) {
+    final cleanQuery = toPlainKeywords(query).toLowerCase().replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (cleanQuery.length < 2) return 0.0;
+
+    final queryWords = cleanQuery
+        .split(RegExp(r'\s+'))
+        .map((w) => w.replaceAll(RegExp(r'[^a-z0-9]'), ''))
+        .where((w) => w.isNotEmpty)
+        .toList();
+
+    if (queryWords.isEmpty) return 0.0;
+
+    var meaningfulTokens = queryWords.where((w) => !_stopWords.contains(w) && w.length > 1).toList();
+    if (meaningfulTokens.isEmpty) {
+      meaningfulTokens = queryWords;
+    }
+
+    final title = paper.title.toLowerCase();
+    final cleanTitle = title.replaceAll(RegExp(r'[^a-z0-9\s]'), ' ').replaceAll(RegExp(r'\s+'), ' ').trim();
+
+    final summary = paper.summary.toLowerCase();
+    final cleanSummary = summary.replaceAll(RegExp(r'[^a-z0-9\s]'), ' ').replaceAll(RegExp(r'\s+'), ' ').trim();
+
+    double score = 0.0;
+
+    // 1. Title Matching (Dominant)
+    final hasExactPhraseInTitle = cleanTitle.contains(cleanQuery);
+    if (hasExactPhraseInTitle) {
+      score += 100.0;
+      if (cleanTitle == cleanQuery) {
+        score += 50.0; // Perfect full title match
+      } else if (cleanTitle.startsWith(cleanQuery)) {
+        score += 20.0;
+      }
+    }
+
+    int titleTokenMatches = 0;
+    for (final token in meaningfulTokens) {
+      final tokenRegex = RegExp(r'\b' + RegExp.escape(token) + r'\b');
+      if (tokenRegex.hasMatch(cleanTitle)) {
+        titleTokenMatches++;
+        score += 25.0;
+      } else if (cleanTitle.contains(token)) {
+        score += 10.0;
+      }
+    }
+
+    if (meaningfulTokens.isNotEmpty && titleTokenMatches > 0) {
+      final coverage = titleTokenMatches / meaningfulTokens.length;
+      score += coverage * 30.0;
+    }
+
+    // 2. Summary / Abstract Matching (Secondary)
+    final hasExactPhraseInSummary = cleanSummary.isNotEmpty && cleanSummary.contains(cleanQuery);
+    if (hasExactPhraseInSummary) {
+      score += 20.0;
+    }
+
+    int summaryTokenMatches = 0;
+    for (final token in meaningfulTokens) {
+      final tokenRegex = RegExp(r'\b' + RegExp.escape(token) + r'\b');
+      final matches = tokenRegex.allMatches(cleanSummary).length;
+      if (matches > 0) {
+        summaryTokenMatches++;
+        score += matches.clamp(1, 3) * 3.0;
+      }
+    }
+
+    if (meaningfulTokens.length > 1 && summaryTokenMatches == meaningfulTokens.length) {
+      score += 15.0; // All keywords appear in abstract
+    }
+
+    // 3. Minor Secondary Tie-breakers (Strictly capped; only if paper has topic relevance)
+    if (score > 0) {
+      if (paper.citationCount != null && paper.citationCount! > 0) {
+        final logCitations = math.log(1 + paper.citationCount!) / math.ln10;
+        score += (logCitations * 0.5).clamp(0.0, 3.0);
+      }
+      final pubYear = int.tryParse(RegExp(r'\b\d{4}\b').firstMatch(paper.published)?.group(0) ?? '');
+      if (pubYear != null && (DateTime.now().year - pubYear) <= 2) {
+        score += 1.0;
+      }
+    }
+
+    return score;
+  }
+
+  /// Re-ranks a list of papers by relevance against [query], breaking ties stably.
+  static List<ArxivPaper> rankPapersByRelevance(List<ArxivPaper> papers, String query) {
+    if (papers.isEmpty) return [];
+    final scored = <_ScoredPaper>[];
+    for (int i = 0; i < papers.length; i++) {
+      scored.add(_ScoredPaper(papers[i], computeRelevanceScore(papers[i], query), i));
+    }
+    scored.sort((a, b) {
+      final diff = b.score.compareTo(a.score);
+      if (diff != 0) return diff;
+      return a.originalIndex.compareTo(b.originalIndex); // Stable tie-breaker
+    });
+    return scored.map((e) => e.paper).toList();
   }
 
   /// Removes arXiv query syntax so the text works on other search engines.
@@ -312,59 +571,161 @@ class SearchService {
     return da.compareTo(db);
   }
 
-  Set<String> _dedupeKeys(ArxivPaper p) {
-    final keys = <String>{};
-
-    // 1. Normalized DOI (Primary key)
-    final doi = _normalizeDoi(p.doi);
-    if (doi != null) {
-      keys.add('doi:$doi');
+  /// Determines whether two paper records refer to the exact same scientific work
+  /// and can be safely merged without metadata corruption.
+  @visibleForTesting
+  static bool canMerge(ArxivPaper a, ArxivPaper b) {
+    // 1. Conflict guard: If both have valid DOIs that differ, they CANNOT be merged.
+    final doiA = ArxivPaper.normalizeDoi(a.doi)?.toLowerCase();
+    final doiB = ArxivPaper.normalizeDoi(b.doi)?.toLowerCase();
+    if (doiA != null && doiB != null && doiA != doiB) {
+      return false;
     }
 
-    // 2. Source-specific identifiers (arXiv ID)
-    final arxivId = _extractArxivId(p);
-    if (arxivId != null) {
-      keys.add('arxiv:$arxivId');
+    // 2. Positive DOI match: identical valid DOIs -> check for volume/proceedings conflict
+    if (doiA != null && doiB != null && doiA == doiB) {
+      // Must not merge if titles conflict completely (e.g. conference volume DOIs)
+      final titleSim = _titleTokenSimilarity(a.title, b.title);
+      if (titleSim < 0.35) {
+        return false;
+      }
+
+      // Check author compatibility
+      final authorsA = _extractAuthorLastNames(a.authors);
+      final authorsB = _extractAuthorLastNames(b.authors);
+      if (authorsA.isNotEmpty && authorsB.isNotEmpty && authorsA.intersection(authorsB).isEmpty) {
+        return false;
+      }
+      return true;
     }
 
-    // 3. Guarded title fallback
-    final cleanTitle = p.title.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
-    if (cleanTitle.length >= 15) {
-      final firstAuthor = _firstAuthorLastName(p.authors);
-      final year = _extractYear(p.published);
+    // 3. arXiv ID check
+    final arxivA = _extractArxivId(a);
+    final arxivB = _extractArxivId(b);
+    if (arxivA != null && arxivB != null) {
+      if (arxivA == arxivB) return true;
+      // Conflicting arXiv IDs -> different preprints
+      return false;
+    }
 
-      if (firstAuthor != null) {
-        keys.add('ta:${cleanTitle}_$firstAuthor');
-      }
-      if (year != null) {
-        keys.add('ty:${cleanTitle}_$year');
-      }
-      // If title is distinct and long enough (>= 28 chars), allow title key
-      if (cleanTitle.length >= 28) {
-        keys.add('t:$cleanTitle');
-      }
-    } else if (cleanTitle.length > 10) {
-      final firstAuthor = _firstAuthorLastName(p.authors);
-      if (firstAuthor != null) {
-        keys.add('ta:${cleanTitle}_$firstAuthor');
-      } else {
-        keys.add('t:$cleanTitle');
+    // 4. Title, Author, and Year matching when DOI is missing on one or both
+    // Disallow generic titles (editorial, preface, erratum, corrigendum, book review) from title-based merge
+    if (_isGenericTitle(a.title) || _isGenericTitle(b.title)) {
+      return false;
+    }
+
+    final cleanTitleA = a.title.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
+    final cleanTitleB = b.title.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
+
+    // Titles must be substantial (at least 10 alphanumeric chars) and match exactly
+    if (cleanTitleA.length < 10 || cleanTitleB.length < 10) return false;
+    if (cleanTitleA != cleanTitleB) return false;
+
+    // Check author compatibility
+    final authorA = _firstAuthorLastName(a.authors);
+    final authorB = _firstAuthorLastName(b.authors);
+    final hasBothAuthors = authorA != null && authorB != null;
+
+    // If both records specify a known first author, they MUST match
+    if (hasBothAuthors && authorA != authorB) {
+      return false;
+    }
+
+    // Check publication year compatibility (allow at most 1 year difference for preprint-to-journal publication lag)
+    final yearA = int.tryParse(_extractYear(a.published) ?? '');
+    final yearB = int.tryParse(_extractYear(b.published) ?? '');
+    if (yearA != null && yearB != null) {
+      if ((yearA - yearB).abs() > 1) {
+        return false;
       }
     }
 
-    return keys;
+    // If both authors are known and match, titles match, and years compatible:
+    if (hasBothAuthors && authorA == authorB) {
+      return true;
+    }
+
+    // If one author is missing/unknown, require distinct title length >= 20 and compatible year
+    if (cleanTitleA.length >= 20 && yearA != null && yearB != null && (yearA - yearB).abs() <= 1) {
+      return true;
+    }
+
+    return false;
   }
 
-  static String? _normalizeDoi(String? raw) {
-    if (raw == null) return null;
-    var d = raw.toLowerCase().trim();
-    d = d.replaceAll('https://doi.org/', '');
-    d = d.replaceAll('http://doi.org/', '');
-    d = d.replaceAll('https://dx.doi.org/', '');
-    d = d.replaceAll('http://dx.doi.org/', '');
-    d = d.replaceAll('doi:', '');
-    d = d.trim();
-    return d.isNotEmpty ? d : null;
+  static double _titleTokenSimilarity(String a, String b) {
+    final tokensA = a
+        .toLowerCase()
+        .split(RegExp(r'[^a-z0-9]+'))
+        .where((t) => t.length >= 2)
+        .toSet();
+    final tokensB = b
+        .toLowerCase()
+        .split(RegExp(r'[^a-z0-9]+'))
+        .where((t) => t.length >= 2)
+        .toSet();
+    if (tokensA.isEmpty || tokensB.isEmpty) return 0.0;
+    final intersection = tokensA.intersection(tokensB).length;
+    final union = tokensA.union(tokensB).length;
+    final jaccard = union > 0 ? intersection / union : 0.0;
+    final minLen = tokensA.length < tokensB.length ? tokensA.length : tokensB.length;
+    final overlapCoeff = minLen > 0 ? intersection / minLen : 0.0;
+    return jaccard > overlapCoeff ? jaccard : overlapCoeff;
+  }
+
+  static Set<String> _extractAuthorLastNames(List<String> authors) {
+    final result = <String>{};
+    for (final a in authors) {
+      final clean = a.trim();
+      if (clean.isEmpty || clean.toLowerCase() == 'unknown') continue;
+      final stripped = clean.replaceAll(RegExp(r',\s*\d{4}-.*$'), '').trim();
+      final parts = stripped.split(RegExp(r'\s+'));
+      if (parts.isNotEmpty) {
+        final last = parts.last.replaceAll(RegExp(r'[^a-zA-Z]'), '').toLowerCase();
+        if (last.length >= 2) {
+          result.add(last);
+        }
+      }
+    }
+    return result;
+  }
+
+  static bool _isGenericTitle(String title) {
+    final lower = title.trim().toLowerCase();
+    final genericPrefixes = [
+      'editorial',
+      'preface',
+      'erratum',
+      'errata',
+      'corrigendum',
+      'corrigenda',
+      'book review',
+      'book reviews',
+      'review of',
+      'introduction',
+      'foreword',
+      'proceedings',
+      'table of contents',
+      'author index',
+      'subject index',
+      'index to volume',
+      'obituary',
+      'in memoriam',
+      'announcement',
+      'announcements',
+      'call for papers',
+    ];
+    for (final prefix in genericPrefixes) {
+      if (lower == prefix ||
+          lower.startsWith('$prefix:') ||
+          lower.startsWith('$prefix -') ||
+          lower.startsWith('$prefix—') ||
+          lower.startsWith('$prefix ') ||
+          lower.startsWith('$prefix.')) {
+        return true;
+      }
+    }
+    return false;
   }
 
   static String? _extractArxivId(ArxivPaper p) {
@@ -423,29 +784,36 @@ class SearchService {
     return u.endsWith('.pdf') || u.contains('/pdf/') || u.contains('.pdf?');
   }
 
-  ArxivPaper _enrichPaper(ArxivPaper target, ArxivPaper incoming) {
-    // 1. DOI
-    final targetDoi = _normalizeDoi(target.doi);
-    final incomingDoi = _normalizeDoi(incoming.doi);
-    final enrichedDoi = (targetDoi == null || targetDoi.isEmpty)
-        ? (incomingDoi != null && incomingDoi.isNotEmpty ? incoming.doi : target.doi)
-        : target.doi;
+  @visibleForTesting
+  ArxivPaper enrichPaper(ArxivPaper target, ArxivPaper incoming) => _enrichPaper(target, incoming);
 
-    // 2. Abstract
+  ArxivPaper _enrichPaper(ArxivPaper target, ArxivPaper incoming) {
+    if (!canMerge(target, incoming)) {
+      return target;
+    }
+
+    // 1. DOI: preserve target DOI if valid, otherwise take incoming if valid
+    final targetDoi = ArxivPaper.normalizeDoi(target.doi);
+    final incomingDoi = ArxivPaper.normalizeDoi(incoming.doi);
+    final enrichedDoi = (targetDoi == null || targetDoi.isEmpty)
+        ? incomingDoi
+        : targetDoi;
+
+    // 2. Abstract: keep target if usable; only adopt incoming if target has none
     final targetSummaryValid = _isAbstractUsable(target.summary);
     final incomingSummaryValid = _isAbstractUsable(incoming.summary);
     final enrichedSummary = (!targetSummaryValid && incomingSummaryValid)
         ? incoming.summary
         : (targetSummaryValid ? target.summary : (incoming.summary.isNotEmpty ? incoming.summary : target.summary));
 
-    // 3. PDF URL
+    // 3. PDF URL: keep target if direct PDF; only adopt incoming if target has none
     final targetHasPdf = _isDirectPdfUrl(target.pdfUrl);
     final incomingHasPdf = _isDirectPdfUrl(incoming.pdfUrl);
     final enrichedPdfUrl = (!targetHasPdf && incomingHasPdf)
         ? incoming.pdfUrl
-        : (target.pdfUrl.isNotEmpty ? target.pdfUrl : incoming.pdfUrl);
+        : (targetHasPdf ? target.pdfUrl : (incomingHasPdf ? incoming.pdfUrl : ''));
 
-    // 4. Authors
+    // 4. Authors: if target has valid authors, keep target; only fill from incoming if target is unknown
     final targetAuthorsUnknown = target.authors.isEmpty ||
         (target.authors.length == 1 && target.authors.first.toLowerCase() == 'unknown');
     final incomingAuthorsUnknown = incoming.authors.isEmpty ||
@@ -454,15 +822,21 @@ class SearchService {
         ? incoming.authors
         : target.authors;
 
-    // 5. Date
-    final targetDateValid = _extractYear(target.published) != null;
-    final incomingDateValid = _extractYear(incoming.published) != null;
-    final enrichedPublished = (!targetDateValid && incomingDateValid)
-        ? incoming.published
-        : target.published;
-    final enrichedUpdated = (!targetDateValid && incomingDateValid)
-        ? incoming.updated
-        : target.updated;
+    // 5. Date: prefer higher-precision date if publication year matches
+    final targetYear = _extractYear(target.published);
+    final incomingYear = _extractYear(incoming.published);
+    String enrichedPublished = target.published;
+    String enrichedUpdated = target.updated;
+
+    if (targetYear == null && incomingYear != null) {
+      enrichedPublished = incoming.published;
+      enrichedUpdated = incoming.updated;
+    } else if (targetYear != null && incomingYear != null && targetYear == incomingYear) {
+      if (incoming.published.length > target.published.length && incoming.published.startsWith(targetYear)) {
+        enrichedPublished = incoming.published;
+        enrichedUpdated = incoming.updated;
+      }
+    }
 
     // 6. Categories / Provenance: preserve all sources
     final catSet = <String>{...target.categories};
@@ -470,9 +844,19 @@ class SearchService {
       if (c.trim().isNotEmpty) catSet.add(c.trim());
     }
 
-    // 7. Citations & References
-    final enrichedCitation = target.citationCount ?? incoming.citationCount;
-    final enrichedReference = target.referenceCount ?? incoming.referenceCount;
+    // 7. Citations & References: prefer highest count
+    int? enrichedCitation = target.citationCount;
+    if (incoming.citationCount != null) {
+      if (enrichedCitation == null || incoming.citationCount! > enrichedCitation) {
+        enrichedCitation = incoming.citationCount;
+      }
+    }
+    int? enrichedReference = target.referenceCount;
+    if (incoming.referenceCount != null) {
+      if (enrichedReference == null || incoming.referenceCount! > enrichedReference) {
+        enrichedReference = incoming.referenceCount;
+      }
+    }
 
     // 8. JournalRef
     final enrichedJournal = (target.journalRef == null || target.journalRef!.trim().isEmpty)
@@ -532,7 +916,7 @@ class SearchService {
     });
 
     try {
-      final response = await _get(uri).timeout(const Duration(seconds: 15));
+      final response = await _get(uri);
       if (response.statusCode == 200) {
         return _parseAtom(response.body);
       }
@@ -548,10 +932,11 @@ class SearchService {
       'query.bibliographic': keywords,
       'select': 'DOI,title,author,abstract,created,URL,subject',
       'rows': rows.toString(),
+      'mailto': politeEmail,
     });
 
     try {
-      final response = await _get(uri).timeout(const Duration(seconds: 15));
+      final response = await _get(uri);
       if (response.statusCode == 200) {
         return _parseCrossref(response.body);
       }
@@ -568,10 +953,11 @@ class SearchService {
       'search': keywords,
       'per-page': rows.toString(),
       'sort': filter.sortBy == 'submittedDate' ? 'publication_date:desc' : 'relevance_score:desc',
+      'mailto': politeEmail,
     });
 
     try {
-      final response = await _get(uri).timeout(const Duration(seconds: 15));
+      final response = await _get(uri);
       if (response.statusCode == 200) {
         return _parseOpenAlex(response.body);
       }
@@ -593,7 +979,7 @@ class SearchService {
     });
 
     try {
-      final response = await _get(uri).timeout(const Duration(seconds: 15));
+      final response = await _get(uri);
       if (response.statusCode == 200) {
         return _parseSemanticScholar(response.body);
       } else if (response.statusCode == 429) {
@@ -646,12 +1032,12 @@ class SearchService {
     });
 
     try {
-      final response = await _get(uri).timeout(const Duration(seconds: 15));
+      final response = await _get(uri);
       if (response.statusCode == 200) {
         return _parseInternetArchive(response.body);
       }
     } catch (e) {
-      print('Internet Archive error: $e');
+      debugPrint('Internet Archive error: $e');
     }
     return [];
   }
@@ -671,12 +1057,12 @@ class SearchService {
           'from': '0',
           'scroll': false,
         }),
-      ).timeout(const Duration(seconds: 30));
+      );
       if (response.statusCode == 200) {
         return _parseArchiveFullText(response.body);
       }
     } catch (e) {
-      print('Internet Archive full-text error: $e');
+      debugPrint('Internet Archive full-text error: $e');
     }
     return [];
   }
@@ -707,7 +1093,7 @@ class SearchService {
         );
       }
     } catch (e) {
-      print('Internet Archive metadata error: $e');
+      debugPrint('Internet Archive metadata error: $e');
     }
     _archiveFilesCache[identifier] = result;
     return result;
@@ -715,20 +1101,13 @@ class SearchService {
 
   Future<ArxivPaper> _withResolvedPdf(ArxivPaper p) async {
     final files = await _resolveArchiveFiles(p.id);
-    return ArxivPaper(
-      id: p.id,
-      title: p.title,
-      authors: p.authors,
-      summary: p.summary,
-      published: p.published,
-      updated: p.updated,
-      categories: p.categories,
-      pdfUrl: files.pdfUrl ?? '',
-      absUrl: p.absUrl,
-      doi: p.doi,
-      journalRef: p.journalRef,
+    return p.copyWith(
+      pdfUrl: files.pdfUrl ?? p.pdfUrl,
     );
   }
+
+  @visibleForTesting
+  Future<ArxivPaper> resolveArchivePdf(ArxivPaper p) => _withResolvedPdf(p);
 
   /// Downloads the full text of a paper for deep reading.
   ///
@@ -747,7 +1126,7 @@ class SearchService {
         return text.length > maxChars ? text.substring(0, maxChars) : text;
       }
     } catch (e) {
-      print('Internet Archive text download error: $e');
+      debugPrint('Internet Archive text download error: $e');
     }
     return null;
   }
@@ -791,23 +1170,27 @@ class SearchService {
         if (categories.isEmpty) categories.add('Crossref');
 
         final url = item['URL']?.toString() ?? '';
-        final doi = item['DOI']?.toString() ?? '';
+        final rawDoi = item['DOI']?.toString();
+        final doi = ArxivPaper.normalizeDoi(rawDoi);
+        final pdfUrl = _isDirectPdfUrl(url) ? url : '';
+        final absUrl = url.isNotEmpty ? url : (doi != null ? 'https://doi.org/$doi' : '');
 
         papers.add(ArxivPaper(
-          id: doi.isNotEmpty ? doi : url,
+          id: (doi != null && doi.isNotEmpty) ? doi : (url.isNotEmpty ? url : title),
           title: title,
           authors: authors,
           summary: abstractText,
           published: created,
           updated: created,
           categories: categories,
-          pdfUrl: url,
-          absUrl: url,
+          pdfUrl: pdfUrl,
+          absUrl: absUrl,
           doi: doi,
+          sources: const [crossrefSource],
         ));
       }
     } catch (e) {
-      print('Crossref parse error: $e');
+      debugPrint('Crossref parse error: $e');
     }
     return papers;
   }
@@ -852,9 +1235,12 @@ class SearchService {
         final created = item['publication_date']?.toString() ?? DateTime.now().toIso8601String();
         final primaryLoc = item['primary_location'] ?? {};
         final url = primaryLoc['landing_page_url']?.toString() ?? '';
-        final pdfUrl = primaryLoc['pdf_url']?.toString() ?? '';
-        final doi = item['doi']?.toString() ?? '';
+        final rawPdfUrl = primaryLoc['pdf_url']?.toString() ?? '';
+        final pdfUrl = _isDirectPdfUrl(rawPdfUrl) ? rawPdfUrl : '';
+        final rawDoi = item['doi']?.toString();
+        final doi = ArxivPaper.normalizeDoi(rawDoi);
         final id = item['id']?.toString() ?? '';
+        final absUrl = url.isNotEmpty ? url : (doi != null ? 'https://doi.org/$doi' : id);
 
         papers.add(ArxivPaper(
           id: id,
@@ -865,12 +1251,13 @@ class SearchService {
           updated: created,
           categories: ['OpenAlex'],
           pdfUrl: pdfUrl,
-          absUrl: url.isNotEmpty ? url : doi,
+          absUrl: absUrl,
           doi: doi,
+          sources: const [openAlexSource],
         ));
       }
     } catch (e) {
-      print('OpenAlex parse error: $e');
+      debugPrint('OpenAlex parse error: $e');
     }
     return papers;
   }
@@ -921,7 +1308,7 @@ class SearchService {
         if (openAccess is Map && openAccess['url'] != null) {
           final u = openAccess['url'].toString().trim();
           if (u.isNotEmpty) {
-            pdfUrl = u;
+            pdfUrl = _isDirectPdfUrl(u) ? u : '';
           }
         }
 
@@ -936,7 +1323,7 @@ class SearchService {
         final extIds = item['externalIds'];
         if (extIds is Map && extIds['DOI'] != null) {
           final d = extIds['DOI'].toString().trim();
-          if (d.isNotEmpty) doi = d;
+          doi = ArxivPaper.normalizeDoi(d);
         }
 
         final venue = item['venue']?.toString().trim();
@@ -974,6 +1361,7 @@ class SearchService {
           journalRef: journalRef,
           citationCount: citationCount,
           referenceCount: referenceCount,
+          sources: const [semanticScholarSource],
         ));
       }
     } catch (e) {
@@ -1023,11 +1411,12 @@ class SearchService {
           categories: [archiveCategory],
           pdfUrl: '', // resolved later via metadata API
           absUrl: 'https://archive.org/details/$identifier',
-          doi: '',
+          doi: null,
+          sources: const [archiveSource],
         ));
       }
     } catch (e) {
-      print('Internet Archive parse error: $e');
+      debugPrint('Internet Archive parse error: $e');
     }
     return papers;
   }
@@ -1076,11 +1465,12 @@ class SearchService {
           categories: [archiveCategory],
           pdfUrl: '',
           absUrl: 'https://archive.org/details/$identifier',
-          doi: '',
+          doi: null,
+          sources: const [archiveSource],
         ));
       }
     } catch (e) {
-      print('Internet Archive full-text parse error: $e');
+      debugPrint('Internet Archive full-text parse error: $e');
     }
     return papers;
   }
@@ -1124,12 +1514,16 @@ class SearchService {
           }
         }
         if (pdfUrl.isEmpty && id.isNotEmpty) {
-          final shortId = id.replaceAll('http://arxiv.org/abs/', '');
-          pdfUrl = 'https://arxiv.org/pdf/$shortId';
+          var cleanShortId = id.trim();
+          cleanShortId = cleanShortId.replaceAll(RegExp(r'^https?:\/\/arxiv\.org\/(abs|pdf)\/', caseSensitive: false), '');
+          cleanShortId = cleanShortId.replaceAll(RegExp(r'^arxiv:\s*', caseSensitive: false), '');
+          cleanShortId = cleanShortId.replaceAll(RegExp(r'\.pdf$', caseSensitive: false), '');
+          pdfUrl = 'https://arxiv.org/pdf/$cleanShortId';
         }
 
-        final doi = _text(entry, 'arxiv:doi', namespace: 'http://arxiv.org/schemas/atom');
-        final journalRef = _text(entry, 'arxiv:journal_ref', namespace: 'http://arxiv.org/schemas/atom');
+        final rawDoi = _text(entry, 'doi', namespaceUri: 'http://arxiv.org/schemas/atom');
+        final doi = ArxivPaper.normalizeDoi(rawDoi);
+        final journalRef = _text(entry, 'journal_ref', namespaceUri: 'http://arxiv.org/schemas/atom');
 
         papers.add(ArxivPaper(
           id: id,
@@ -1142,15 +1536,21 @@ class SearchService {
           pdfUrl: pdfUrl,
           absUrl: absUrl,
           doi: doi,
-          journalRef: journalRef,
+          journalRef: journalRef.isNotEmpty ? journalRef : null,
+          sources: const [arxivSource],
         ));
       } catch (_) {}
     }
     return papers;
   }
 
-  String _text(XmlElement node, String tag, {String? namespace}) {
-    final elements = node.findElements(tag, namespace: namespace);
+  String _text(XmlElement node, String tag, {String? namespaceUri}) {
+    final name = (namespaceUri != null && tag.contains(':'))
+        ? tag.split(':').last
+        : tag;
+    final elements = namespaceUri != null
+        ? node.findElements(name, namespaceUri: namespaceUri)
+        : node.findElements(tag);
     if (elements.isEmpty) return '';
     return elements.first.innerText.trim();
   }

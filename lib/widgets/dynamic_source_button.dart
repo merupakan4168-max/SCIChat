@@ -17,15 +17,22 @@ class SourceConfig {
     required this.url,
   });
 
+  static bool isDirectPdf(String url) {
+    final u = url.trim().toLowerCase();
+    if (u.isEmpty) return false;
+    return u.endsWith('.pdf') || u.contains('/pdf/') || u.contains('.pdf?');
+  }
+
   static SourceConfig? fromUrl(String url, {bool isPdfFallback = false}) {
     if (url.isEmpty) return null;
 
     final String lowerUrl = url.toLowerCase();
+    final bool isPdf = isDirectPdf(lowerUrl);
 
     String label = 'Open Paper';
     IconData icon = Icons.open_in_browser_outlined;
 
-    if (isPdfFallback || lowerUrl.endsWith('.pdf')) {
+    if (isPdf) {
       label = 'Open PDF';
       icon = Icons.picture_as_pdf_outlined;
     } else if (lowerUrl.contains('arxiv.org')) {
@@ -40,6 +47,9 @@ class SourceConfig {
     } else if (lowerUrl.contains('semanticscholar.org')) {
       label = 'Open on Semantic Scholar';
       icon = Icons.school_outlined;
+    } else if (lowerUrl.contains('crossref.org') || lowerUrl.contains('doi.org')) {
+      label = 'Open on CrossRef';
+      icon = Icons.link_outlined;
     }
 
     return SourceConfig(
@@ -68,9 +78,11 @@ class DynamicSourceButton extends StatelessWidget {
     this.paper,
   });
 
+  static bool isDirectPdf(String url) => SourceConfig.isDirectPdf(url);
+
   Future<void> _launch(BuildContext context, String url) async {
     final lowerUrl = url.toLowerCase();
-    if (paper != null && (isPdfFallback || lowerUrl.endsWith('.pdf'))) {
+    if (paper != null && isDirectPdf(lowerUrl)) {
       Navigator.push(
         context,
         MaterialPageRoute(
@@ -163,10 +175,14 @@ class _FullButtonState extends State<_FullButton> {
               color: widget.primary ? context.colors.surface0 : context.colors.textSecondary,
             ),
             const SizedBox(width: 8),
-            Text(
-              widget.label,
-              style: context.typography.labelLarge?.copyWith(
-                color: widget.primary ? context.colors.surface0 : context.colors.textSecondary,
+            Flexible(
+              child: Text(
+                widget.label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: context.typography.labelLarge?.copyWith(
+                  color: widget.primary ? context.colors.surface0 : context.colors.textSecondary,
+                ),
               ),
             ),
           ],
@@ -212,7 +228,7 @@ class _PillButton extends StatelessWidget {
           height: 36,
           width: isExpanded ? double.infinity : null,
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 14),
+            padding: const EdgeInsets.symmetric(horizontal: 10),
             child: Row(
               mainAxisSize: isExpanded ? MainAxisSize.max : MainAxisSize.min,
               mainAxisAlignment: MainAxisAlignment.center,

@@ -220,8 +220,12 @@ class _ChatScreenState extends State<ChatScreen> {
                                 _controller.text = suggestion;
                                 _send();
                               },
-                              onRetry: msg.status == MessageStatus.error
+                              onRetry: msg.status == MessageStatus.error && msg.content.isEmpty
                                   ? () => provider.retryMessage(msg.id)
+                                  : null,
+                              onContinue: ((msg.isTruncated && msg.finishReason != 'cancelled') ||
+                                      (msg.status == MessageStatus.error && msg.content.isNotEmpty))
+                                  ? () => provider.continueMessage(msg.id)
                                   : null,
                               onDismissError: msg.status == MessageStatus.error
                                   ? () => provider.dismissError(msg.id)

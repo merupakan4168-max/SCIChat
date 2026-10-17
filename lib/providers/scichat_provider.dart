@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'dart:async';
 import 'dart:io' as dart_io;
+import 'dart:math' as math;
 import 'package:uuid/uuid.dart';
 import '../models/models.dart';
 import '../services/search_service.dart';
@@ -20,6 +21,14 @@ class SciChatProvider extends ChangeNotifier {
   late GeminiService _gemini;
   bool _hasCustomGemini = false;
   final _uuid = const Uuid();
+  bool _isCancelled = false;
+
+  void cancelGeneration() {
+    if (_appState == AppState.streaming || _appState == AppState.thinking) {
+      _isCancelled = true;
+      notifyListeners();
+    }
+  }
 
   SciChatProvider({
     SearchService? searchService,
@@ -215,6 +224,41 @@ class SciChatProvider extends ChangeNotifier {
     if (t.length < 20) return false;
     
     return true;
+  }
+
+  /// Resolves which specific paper is referenced by an ordinal or positional reference
+  /// (e.g. "paper kedua", "paper ke-2", "paper 2", "makalah pertama", etc.)
+  @visibleForTesting
+  static ArxivPaper? resolveReferencedPaper(String query, List<ArxivPaper> papers) {
+    if (papers.isEmpty) return null;
+    final lower = query.toLowerCase();
+
+    // 1st paper: "pertama", "ke-1", "ke 1", "paper 1", "makalah 1"
+    if (RegExp(r'\b(paper|makalah|artikel|jurnal|dokumen)\s+(pertama|ke[- ]?1|1)\b').hasMatch(lower) ||
+        RegExp(r'\b(pertama|ke[- ]?1)\s+(paper|makalah|artikel|jurnal|dokumen)\b').hasMatch(lower)) {
+      return papers.isNotEmpty ? papers[0] : null;
+    }
+    // 2nd paper: "kedua", "ke-2", "ke 2", "paper 2", "makalah 2"
+    if (RegExp(r'\b(paper|makalah|artikel|jurnal|dokumen)\s+(kedua|ke[- ]?2|2)\b').hasMatch(lower) ||
+        RegExp(r'\b(kedua|ke[- ]?2)\s+(paper|makalah|artikel|jurnal|dokumen)\b').hasMatch(lower)) {
+      return papers.length > 1 ? papers[1] : null;
+    }
+    // 3rd paper: "ketiga", "ke-3", "ke 3", "paper 3", "makalah 3"
+    if (RegExp(r'\b(paper|makalah|artikel|jurnal|dokumen)\s+(ketiga|ke[- ]?3|3)\b').hasMatch(lower) ||
+        RegExp(r'\b(ketiga|ke[- ]?3)\s+(paper|makalah|artikel|jurnal|dokumen)\b').hasMatch(lower)) {
+      return papers.length > 2 ? papers[2] : null;
+    }
+    // 4th paper: "keempat", "ke-4", "ke 4", "paper 4", "makalah 4"
+    if (RegExp(r'\b(paper|makalah|artikel|jurnal|dokumen)\s+(keempat|ke[- ]?4|4)\b').hasMatch(lower) ||
+        RegExp(r'\b(keempat|ke[- ]?4)\s+(paper|makalah|artikel|jurnal|dokumen)\b').hasMatch(lower)) {
+      return papers.length > 3 ? papers[3] : null;
+    }
+    // 5th paper: "kelima", "ke-5", "ke 5", "paper 5", "makalah 5"
+    if (RegExp(r'\b(paper|makalah|artikel|jurnal|dokumen)\s+(kelima|ke[- ]?5|5)\b').hasMatch(lower) ||
+        RegExp(r'\b(kelima|ke[- ]?5)\s+(paper|makalah|artikel|jurnal|dokumen)\b').hasMatch(lower)) {
+      return papers.length > 4 ? papers[4] : null;
+    }
+    return null;
   }
 
   void setPendingAttachment(ArxivPaper? paper) {
@@ -507,8 +551,11 @@ class SciChatProvider extends ChangeNotifier {
       final fullTexts = <String, String>{};
       String? searchStatusNotice;
 
-      // --- Perbaikan Integritas Konteks (Phase 8B & 8C.1) ---
+      // --- Perbaikan Integritas Konteks (Phase 8B & Phase 1: CTX-01) ---
       bool isQueryingActiveContext = false;
+      bool isQueryingPriorSessionPapers = false;
+      ArxivPaper? specificReferencedPaper;
+      List<ArxivPaper> priorSessionPapers = [];
       bool forceSearch = false;
       bool combineSources = false;
 
@@ -539,9 +586,52 @@ class SciChatProvider extends ChangeNotifier {
             isQueryingActiveContext = true;
           }
         }
+      } else {
+        // Active context is empty. Check if query references prior papers from this session.
+        for (final m in _messages.reversed) {
+          if (m.papers.isNotEmpty) {
+            priorSessionPapers = m.papers;
+            break;
+          }
+        }
+        if (priorSessionPapers.isEmpty && _lastSearchResults.isNotEmpty) {
+          priorSessionPapers = _lastSearchResults;
+        }
+
+        final lower = text.toLowerCase();
+        final asksForNew = lower.contains('makalah lain') ||
+            lower.contains('paper lain') ||
+            lower.contains('sumber lain') ||
+            lower.contains('makalah baru') ||
+            lower.contains('paper baru') ||
+            lower.contains('cari paper baru') ||
+            lower.contains('cari makalah baru') ||
+            lower.contains('cari literatur baru');
+
+        final hasPriorReference =
+            RegExp(r'\b(paper|makalah|artikel|jurnal|dokumen|penelitian|riset)\s+(ke[- ]?\d+|pertama|kedua|ketiga|keempat|kelima|[1-9])\b', caseSensitive: false).hasMatch(lower) ||
+            RegExp(r'\b(ke[- ]?\d+|pertama|kedua|ketiga|keempat|kelima)\s+(paper|makalah|artikel|jurnal|dokumen)\b', caseSensitive: false).hasMatch(lower) ||
+            RegExp(r'\b(paper|makalah|artikel|jurnal|dokumen|penelitian|riset)\s+(tadi|tersebut|di\s*atas|sebelumnya|itu)\b', caseSensitive: false).hasMatch(lower) ||
+            RegExp(r'\b(tadi|tersebut|sebelumnya)\s+(paper|makalah|artikel|jurnal|dokumen)\b', caseSensitive: false).hasMatch(lower) ||
+            RegExp(r'\b(kedua|ketiga|semua)\s+(paper|makalah|artikel)\s+(tersebut|tadi|di\s*atas)?\b', caseSensitive: false).hasMatch(lower) ||
+            lower.contains('paper tadi') ||
+            lower.contains('makalah tadi') ||
+            lower.contains('paper tersebut') ||
+            lower.contains('makalah tersebut') ||
+            lower.contains('paper di atas') ||
+            lower.contains('makalah di atas') ||
+            lower.contains('kedua paper') ||
+            lower.contains('kedua makalah');
+
+        if (hasPriorReference && !asksForNew) {
+          isQueryingPriorSessionPapers = true;
+          if (priorSessionPapers.isNotEmpty) {
+            specificReferencedPaper = resolveReferencedPaper(text, priorSessionPapers);
+          }
+        }
       }
 
-      bool shouldSearch = !isQueryingActiveContext && (deep || intentType == 'search' || intentType == 'summarize' || forceSearch);
+      bool shouldSearch = !isQueryingActiveContext && !isQueryingPriorSessionPapers && (deep || intentType == 'search' || intentType == 'summarize' || forceSearch);
 
       // Step 2: Search all sources
       if (shouldSearch) {
@@ -647,6 +737,8 @@ class SciChatProvider extends ChangeNotifier {
           }
         }
         _setStatus(AppState.thinking, 'Menyusun jawaban berdasarkan konteks makalah...');
+      } else if (isQueryingPriorSessionPapers) {
+        _setStatus(AppState.thinking, 'Menganalisis makalah dari percakapan sebelumnya...');
       } else {
         // Menyusun jawaban final berdasarkan proses sebelumnya
         if (shouldSearch) {
@@ -716,6 +808,12 @@ class SciChatProvider extends ChangeNotifier {
       if (isQueryingActiveContext) {
         papers = List.from(_activeContexts); // Metadata pesan (UI & ekspor) menggunakan konteks aktif
         geminiContextPapers = []; // Jangan kirim hasil search bocor ke blok [RETRIEVED PAPERS]
+      } else if (isQueryingPriorSessionPapers) {
+        // Pertanyaan lanjutan terhadap paper sesi sebelumnya
+        papers = specificReferencedPaper != null
+            ? [specificReferencedPaper]
+            : (priorSessionPapers.isNotEmpty ? List.from(priorSessionPapers) : const []);
+        geminiContextPapers = []; // Konteks paper sudah dipertahankan pada riwayat turn sebelumnya
       } else if (_activeContexts.isNotEmpty && combineSources) {
         // Compare mode: Pertahankan konteks aktif beserta hasil pencarian baru di dalam metadata pesan
         // (UI chips & ResearchNote.sources). Karena List<ArxivPaper> tidak dibatasi 3 di ResearchNote.
@@ -724,11 +822,12 @@ class SciChatProvider extends ChangeNotifier {
         papers = combined.where((p) => seen.add(p.id)).toList();
       }
 
-      final chatHistory = _messages.where((m) => m.status == MessageStatus.done).toList();
+      final chatHistory = _messages.where((m) => m.status == MessageStatus.done && m.id != userMsg.id).toList();
       String streamedContent = '';
       bool receivedFirstChunk = false;
       DateTime lastNotifyTime = DateTime.now();
       const throttleDuration = Duration(milliseconds: 100);
+      _isCancelled = false;
 
       try {
         final stream = _gemini.chatStream(
@@ -741,6 +840,10 @@ class SciChatProvider extends ChangeNotifier {
         );
 
         await for (final chunk in stream) {
+          if (_isCancelled) {
+            debugPrint('[AI_DEBUG] Stream dibatalkan oleh pengguna');
+            break;
+          }
           final isFirst = !receivedFirstChunk;
           if (isFirst) {
             receivedFirstChunk = true;
@@ -762,17 +865,46 @@ class SciChatProvider extends ChangeNotifier {
           }
         }
 
+        if (_isCancelled) {
+          _isCancelled = false;
+          if (streamedContent.trim().isNotEmpty) {
+            final cancelledMsg = thinkingMsg.copyWith(
+              content: streamedContent,
+              status: MessageStatus.done,
+              papers: papers,
+              isTruncated: true,
+              finishReason: 'cancelled',
+            );
+            _messages = _messages.map((m) => m.id == assistantId ? cancelledMsg : m).toList();
+            _appState = AppState.ready;
+            _statusText = null;
+            notifyListeners();
+            return;
+          } else {
+            _messages = _messages.where((m) => m.id != assistantId).toList();
+            _appState = AppState.ready;
+            _statusText = null;
+            notifyListeners();
+            return;
+          }
+        }
+
         // Jika stream selesai tanpa teks sama sekali (empty stream):
         if (streamedContent.trim().isEmpty) {
           debugPrint('[AI_DEBUG] Stream selesai tanpa teks, memicu fallback monolitik');
           throw Exception('Stream kosong tanpa konten');
         }
 
-        // Finalisasi saat stream selesai normal dengan teks
+        final finishReason = _gemini.lastStreamFinishReason;
+        final isTruncated = finishReason == 'length';
+
+        // Finalisasi saat stream selesai
         final doneMsg = thinkingMsg.copyWith(
           content: streamedContent,
           status: MessageStatus.done,
           papers: papers,
+          isTruncated: isTruncated,
+          finishReason: finishReason,
         );
         _messages = _messages.map((m) => m.id == assistantId ? doneMsg : m).toList();
         _appState = AppState.ready;
@@ -806,6 +938,8 @@ class SciChatProvider extends ChangeNotifier {
               content: response,
               status: MessageStatus.done,
               papers: papers,
+              isTruncated: false,
+              finishReason: 'stop',
             );
             _messages = _messages.map((m) => m.id == assistantId ? doneMsg : m).toList();
             _appState = AppState.ready;
@@ -826,6 +960,8 @@ class SciChatProvider extends ChangeNotifier {
               status: MessageStatus.error,
               papers: papers,
               errorType: _classifyChatError(fallbackError),
+              isTruncated: false,
+              finishReason: 'error',
             );
             _messages = _messages.map((m) => m.id == assistantId ? errMsg : m).toList();
             _appState = AppState.error;
@@ -840,6 +976,8 @@ class SciChatProvider extends ChangeNotifier {
             status: MessageStatus.error,
             papers: papers,
             errorType: _classifyChatError(streamError),
+            isTruncated: true,
+            finishReason: 'error',
           );
           _messages = _messages.map((m) => m.id == assistantId ? partialErrMsg : m).toList();
           _appState = AppState.error;
@@ -931,6 +1069,182 @@ class SciChatProvider extends ChangeNotifier {
     }
     _syncSession();
     notifyListeners();
+  }
+
+  Future<void> continueMessage(String messageId) async {
+    if (isLoading) return;
+
+    final msgIndex = _messages.indexWhere((m) => m.id == messageId);
+    if (msgIndex < 0) return;
+
+    final targetMsg = _messages[msgIndex];
+    if (targetMsg.isUser) return;
+    if (targetMsg.finishReason == 'cancelled') return;
+    if (!targetMsg.isTruncated &&
+        !(targetMsg.status == MessageStatus.error && targetMsg.content.trim().isNotEmpty)) {
+      return;
+    }
+
+    // Temukan pesan user pemantik yang mendahului pesan ini
+    ChatMessage? userMsg;
+    for (int i = msgIndex - 1; i >= 0; i--) {
+      if (_messages[i].isUser) {
+        userMsg = _messages[i];
+        break;
+      }
+    }
+    if (userMsg == null) return;
+
+    final initialContent = targetMsg.content;
+    final papers = targetMsg.papers;
+
+    _setStatus(AppState.streaming, null);
+    _errorMessage = null;
+    _isCancelled = false;
+
+    final inProgressMsg = targetMsg.copyWith(
+      status: MessageStatus.streaming,
+      errorType: null,
+    );
+    _messages = _messages.map((m) => m.id == messageId ? inProgressMsg : m).toList();
+    notifyListeners();
+
+    final chatHistory = _messages
+        .where((m) => m.status == MessageStatus.done && m.id != targetMsg.id && m.id != userMsg!.id)
+        .toList();
+
+    // Pertahankan konteks paper (dari Fase 1)
+    final geminiContextPapers = papers.isNotEmpty
+        ? papers
+        : (_activeContexts.isNotEmpty)
+            ? List<ArxivPaper>.from(_activeContexts)
+            : <ArxivPaper>[];
+
+    final fullTexts = <String, String>{};
+
+    String continuationBuffer = '';
+    bool receivedContinuationChunk = false;
+    DateTime lastNotifyTime = DateTime.now();
+    const throttleDuration = Duration(milliseconds: 100);
+
+    try {
+      final stream = _gemini.continueChatStream(
+        history: chatHistory,
+        userMessage: userMsg.content,
+        partialAssistantResponse: initialContent,
+        papers: geminiContextPapers,
+        fullTexts: fullTexts,
+        eli5Mode: _eli5Mode,
+        skill: _activeSkill,
+      );
+
+      await for (final chunk in stream) {
+        if (_isCancelled) {
+          debugPrint('[AI_DEBUG] Kelanjutan respons dibatalkan pengguna');
+          break;
+        }
+
+        final isFirst = !receivedContinuationChunk;
+        if (isFirst) {
+          receivedContinuationChunk = true;
+        }
+        continuationBuffer += chunk;
+
+        final processedContinuation = _stripLeadingOverlap(initialContent, continuationBuffer);
+        final combined = _combineText(initialContent, processedContinuation);
+
+        final now = DateTime.now();
+        if (isFirst || now.difference(lastNotifyTime) >= throttleDuration) {
+          lastNotifyTime = now;
+          final partialMsg = targetMsg.copyWith(
+            content: combined,
+            status: MessageStatus.streaming,
+          );
+          _messages = _messages.map((m) => m.id == messageId ? partialMsg : m).toList();
+          notifyListeners();
+        }
+      }
+
+      final processedContinuation = _stripLeadingOverlap(initialContent, continuationBuffer);
+      final combined = _combineText(initialContent, processedContinuation);
+
+      if (_isCancelled) {
+        _isCancelled = false;
+        final cancelledMsg = targetMsg.copyWith(
+          content: combined,
+          status: MessageStatus.done,
+          isTruncated: true,
+          finishReason: 'cancelled',
+        );
+        _messages = _messages.map((m) => m.id == messageId ? cancelledMsg : m).toList();
+        _appState = AppState.ready;
+        notifyListeners();
+        return;
+      }
+
+      final finishReason = _gemini.lastStreamFinishReason;
+      final isTruncated = finishReason == 'length';
+
+      final doneMsg = targetMsg.copyWith(
+        content: combined,
+        status: MessageStatus.done,
+        isTruncated: isTruncated,
+        finishReason: finishReason,
+      );
+      _messages = _messages.map((m) => m.id == messageId ? doneMsg : m).toList();
+      _appState = AppState.ready;
+      _statusText = null;
+
+      notifyListeners();
+    } catch (e) {
+      debugPrint('[AI_DEBUG] Gagal melanjutkan respons: $e');
+      // PERTAHANKAN TEKS YANG SUDAH DITERIMA
+      final processedContinuation = _stripLeadingOverlap(initialContent, continuationBuffer);
+      final currentContent = continuationBuffer.isNotEmpty
+          ? _combineText(initialContent, processedContinuation)
+          : initialContent;
+
+      final errMsg = targetMsg.copyWith(
+        content: currentContent,
+        status: MessageStatus.error,
+        errorType: _classifyChatError(e),
+        isTruncated: true,
+        finishReason: 'error',
+      );
+      _messages = _messages.map((m) => m.id == messageId ? errMsg : m).toList();
+      _appState = AppState.error;
+      _errorMessage = e.toString();
+      _statusText = null;
+      notifyListeners();
+    }
+  }
+
+  static String _stripLeadingOverlap(String partial, String continuation) {
+    if (partial.isEmpty || continuation.isEmpty) return continuation;
+    final trimmedPartial = partial.trimRight();
+    final trimmedCont = continuation.trimLeft();
+
+    final maxCheck = math.min(120, math.min(trimmedPartial.length, trimmedCont.length));
+    for (int len = maxCheck; len >= 3; len--) {
+      final suffix = trimmedPartial.substring(trimmedPartial.length - len);
+      if (trimmedCont.startsWith(suffix)) {
+        return trimmedCont.substring(len);
+      }
+    }
+    return continuation;
+  }
+
+  static String _combineText(String partial, String continuation) {
+    if (continuation.isEmpty) return partial;
+    if (partial.isEmpty) return continuation;
+
+    final needsSpace = !partial.endsWith(' ') &&
+        !partial.endsWith('\n') &&
+        !continuation.startsWith(' ') &&
+        !continuation.startsWith('\n') &&
+        !RegExp(r'^[.,!?;:]').hasMatch(continuation);
+
+    return needsSpace ? '$partial $continuation' : '$partial$continuation';
   }
 
   Future<void> _generateFollowUpSuggestionsAsync({
