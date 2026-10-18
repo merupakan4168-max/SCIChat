@@ -21,7 +21,6 @@ import '../widgets/paper_card.dart';
 import '../widgets/press_feedback.dart';
 import 'guide_screen.dart';
 
-
 class ChatScreen extends StatefulWidget {
   const ChatScreen({super.key});
 
@@ -127,11 +126,12 @@ class _ChatScreenState extends State<ChatScreen> {
   Widget build(BuildContext context) {
     final provider = context.watch<SciChatProvider>();
     final messages = provider.messages;
-    final isStreaming = messages.isNotEmpty && messages.last.status == MessageStatus.streaming;
-    final currentLastContentLength = (isStreaming && messages.isNotEmpty) ? messages.last.content.length : 0;
-    final currentLastFollowUpCount = messages.isNotEmpty
-        ? messages.last.followUpSuggestions.length
-        : 0;
+    final isStreaming =
+        messages.isNotEmpty && messages.last.status == MessageStatus.streaming;
+    final currentLastContentLength =
+        (isStreaming && messages.isNotEmpty) ? messages.last.content.length : 0;
+    final currentLastFollowUpCount =
+        messages.isNotEmpty ? messages.last.followUpSuggestions.length : 0;
 
     // Auto-scroll on new messages, session change, streaming text expansion, or follow-up cards arrival
     if (provider.activeSessionId != _lastSessionId) {
@@ -167,7 +167,6 @@ class _ChatScreenState extends State<ChatScreen> {
         children: [
           Column(
             children: [
-
               // Messages list (runs to the bottom edge, scrolls behind the composer)
               Expanded(
                 child: messages.isEmpty
@@ -178,7 +177,8 @@ class _ChatScreenState extends State<ChatScreen> {
                     : NotificationListener<ScrollNotification>(
                         onNotification: (notification) {
                           if (notification is UserScrollNotification) {
-                            if (notification.direction == ScrollDirection.forward) {
+                            if (notification.direction ==
+                                ScrollDirection.forward) {
                               // Pengguna menggulir ke atas
                               if (!_userScrolledUp) {
                                 setState(() => _userScrolledUp = true);
@@ -187,13 +187,15 @@ class _ChatScreenState extends State<ChatScreen> {
                           } else if (notification is ScrollUpdateNotification) {
                             if (_scrollController.hasClients) {
                               final pos = _scrollController.position;
-                              final distFromBottom = pos.maxScrollExtent - pos.pixels;
+                              final distFromBottom =
+                                  pos.maxScrollExtent - pos.pixels;
                               if (distFromBottom <= 60.0) {
                                 // Pengguna kembali ke dekat dasar
                                 if (_userScrolledUp) {
                                   setState(() => _userScrolledUp = false);
                                 }
-                              } else if (distFromBottom > 160.0 && notification.dragDetails != null) {
+                              } else if (distFromBottom > 160.0 &&
+                                  notification.dragDetails != null) {
                                 // Pengguna menyeret layar menjauh dari dasar
                                 if (!_userScrolledUp) {
                                   setState(() => _userScrolledUp = true);
@@ -212,7 +214,8 @@ class _ChatScreenState extends State<ChatScreen> {
                             return ChatBubble(
                               message: msg,
                               isFavorite: (id) => provider.isFavorite(id),
-                              onFavoriteToggle: (p) => provider.toggleFavorite(p),
+                              onFavoriteToggle: (p) =>
+                                  provider.toggleFavorite(p),
                               onPaperTap: _openPaper,
                               onSummarize: _summarizePaper,
                               onChatPdf: (p) => provider.setActivePaper(p),
@@ -220,11 +223,14 @@ class _ChatScreenState extends State<ChatScreen> {
                                 _controller.text = suggestion;
                                 _send();
                               },
-                              onRetry: msg.status == MessageStatus.error && msg.content.isEmpty
+                              onRetry: msg.status == MessageStatus.error &&
+                                      msg.content.isEmpty
                                   ? () => provider.retryMessage(msg.id)
                                   : null,
-                              onContinue: ((msg.isTruncated && msg.finishReason != 'cancelled') ||
-                                      (msg.status == MessageStatus.error && msg.content.isNotEmpty))
+                              onContinue: ((msg.isTruncated &&
+                                          msg.finishReason != 'cancelled') ||
+                                      (msg.status == MessageStatus.error &&
+                                          msg.content.isNotEmpty))
                                   ? () => provider.continueMessage(msg.id)
                                   : null,
                               onDismissError: msg.status == MessageStatus.error
@@ -237,7 +243,6 @@ class _ChatScreenState extends State<ChatScreen> {
               ),
             ],
           ),
-
 
           // ── Top Fade Gradient ─────────────────────────────────────────────
           // Gradasi transparan ke warna background halaman di bawah AppBar
@@ -326,47 +331,48 @@ class _ChatScreenState extends State<ChatScreen> {
           duration: 150.ms,
         ),
       ],
-      child: Material(
-        key: const Key('scrollToBottomButton'),
-        color: Colors.transparent,
-        child: PressFeedback(
-          scaleFactor: 0.96,
-          child: InkWell(
-          onTap: () {
-            HapticFeedback.lightImpact();
-            _scrollToBottom();
-          },
-          borderRadius: BorderRadius.circular(20),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-            decoration: BoxDecoration(
-              color: context.colors.surface2,
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(color: context.colors.borderSubtle),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.15),
-                  blurRadius: 8,
-                  offset: const Offset(0, 3),
-                ),
-              ],
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(Icons.arrow_downward, size: 14, color: context.colors.accent),
-                const SizedBox(width: 6),
-                Text(
-                  'Kembali ke respons terbaru',
-                  style: context.typography.labelSmall?.copyWith(
-                    color: context.colors.textPrimary,
-                    fontWeight: FontWeight.w600,
+      child: Tooltip(
+        message: 'Kembali ke respons terbaru',
+        child: Semantics(
+          label: 'Kembali ke respons terbaru',
+          button: true,
+          child: Material(
+            key: const Key('scrollToBottomButton'),
+            color: Colors.transparent,
+            child: PressFeedback(
+              scaleFactor: 0.92,
+              child: InkWell(
+                onTap: () {
+                  HapticFeedback.lightImpact();
+                  _scrollToBottom();
+                },
+                borderRadius: BorderRadius.circular(18),
+                child: Container(
+                  width: 36,
+                  height: 36,
+                  decoration: BoxDecoration(
+                    color: context.colors.surface2,
+                    shape: BoxShape.circle,
+                    border: Border.all(color: context.colors.borderSubtle),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.18),
+                        blurRadius: 8,
+                        offset: const Offset(0, 3),
+                      ),
+                    ],
+                  ),
+                  child: Center(
+                    child: Icon(
+                      Icons.arrow_downward,
+                      size: 18,
+                      color: context.colors.accent,
+                    ),
                   ),
                 ),
-              ],
+              ),
             ),
           ),
-        ),
         ),
       ),
     );
@@ -390,34 +396,34 @@ class _ChatScreenState extends State<ChatScreen> {
       actions: [
         if (provider.messages.isNotEmpty)
           PressFeedback(
-            scaleFactor: 0.92,
-            child: IconButton(
-            icon: const Icon(Icons.add_comment_outlined, size: 20),
-            color: context.colors.textMuted,
-            onPressed: () {
-              HapticFeedback.lightImpact();
-              provider.createNewSession();
-            },
-            tooltip: 'Obrolan Baru',
-          )),
+              scaleFactor: 0.92,
+              child: IconButton(
+                icon: const Icon(Icons.add_comment_outlined, size: 20),
+                color: context.colors.textMuted,
+                onPressed: () {
+                  HapticFeedback.lightImpact();
+                  provider.createNewSession();
+                },
+                tooltip: 'Obrolan Baru',
+              )),
         if (provider.messages.isNotEmpty)
           PressFeedback(
-            scaleFactor: 0.92,
-            child: IconButton(
-            icon: const Icon(Icons.download_outlined, size: 20),
-            color: context.colors.textMuted,
-            onPressed: () {
-              HapticFeedback.lightImpact();
-              final markdown = _generateMarkdown(provider.messages);
-              SharePlus.instance.share(
-                ShareParams(
-                  text: markdown,
-                  subject: 'Ekspor Chat SCIChat',
-                ),
-              );
-            },
-            tooltip: 'Ekspor Chat',
-          )),
+              scaleFactor: 0.92,
+              child: IconButton(
+                icon: const Icon(Icons.download_outlined, size: 20),
+                color: context.colors.textMuted,
+                onPressed: () {
+                  HapticFeedback.lightImpact();
+                  final markdown = _generateMarkdown(provider.messages);
+                  SharePlus.instance.share(
+                    ShareParams(
+                      text: markdown,
+                      subject: 'Ekspor Chat SCIChat',
+                    ),
+                  );
+                },
+                tooltip: 'Ekspor Chat',
+              )),
       ],
     );
   }
@@ -435,8 +441,6 @@ class _ChatScreenState extends State<ChatScreen> {
     return buffer.toString();
   }
 }
-
-
 
 class _EmptyState extends StatefulWidget {
   final Function(String) onSuggestionTap;
@@ -482,7 +486,7 @@ class _EmptyStateState extends State<_EmptyState> {
   @override
   Widget build(BuildContext context) {
     final provider = context.watch<SciChatProvider>();
-    
+
     return SingleChildScrollView(
       keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
       padding: const EdgeInsets.fromLTRB(24, 40, 24, 240),
@@ -490,79 +494,87 @@ class _EmptyStateState extends State<_EmptyState> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           _TypingHeroText(),
-
           const SizedBox(height: 12),
           Text(
             'Search arXiv papers, get AI-powered summaries, and explore scientific literature.',
             style: context.typography.bodyMedium?.copyWith(
-              color: context.colors.textMuted, height: 1.55,
+              color: context.colors.textMuted,
+              height: 1.55,
             ),
           ).animate(delay: 80.ms).fadeIn(duration: 400.ms),
-
           const SizedBox(height: 40),
-
           Row(
             children: [
               Text(
                 'Coba tanyakan',
                 style: context.typography.labelSmall?.copyWith(
-                  fontSize: 10, color: context.colors.textMuted, letterSpacing: 0.8,
+                  fontSize: 10,
+                  color: context.colors.textMuted,
+                  letterSpacing: 0.8,
                 ),
               ),
               const Spacer(),
               PressFeedback(
-                scaleFactor: 0.9,
-                child: InkWell(
-                onTap: () => setState(() => _shuffleSuggestions()),
-                borderRadius: BorderRadius.circular(20),
-                child: Padding(
-                  padding: const EdgeInsets.all(4.0),
-                  child: Icon(Icons.refresh, size: 14, color: context.colors.textMuted),
-                ),
-              ))
+                  scaleFactor: 0.9,
+                  child: InkWell(
+                    onTap: () => setState(() => _shuffleSuggestions()),
+                    borderRadius: BorderRadius.circular(20),
+                    child: Padding(
+                      padding: const EdgeInsets.all(4.0),
+                      child: Icon(Icons.refresh,
+                          size: 14, color: context.colors.textMuted),
+                    ),
+                  ))
             ],
           ).animate(delay: 160.ms).fadeIn(duration: 300.ms),
-
           const SizedBox(height: 12),
-
           AnimatedSwitcher(
             duration: 300.ms,
             child: Column(
               key: ValueKey(_currentSuggestions.join()),
               crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: _currentSuggestions.asMap().entries.map((e) => Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: _SuggestionChip(
-                  text: e.value,
-                  onTap: () => widget.onSuggestionTap(e.value),
-                  delay: Duration(milliseconds: 50 + e.key * 40),
-                ),
-              )).toList(),
+              children: _currentSuggestions
+                  .asMap()
+                  .entries
+                  .map((e) => Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: _SuggestionChip(
+                          text: e.value,
+                          onTap: () => widget.onSuggestionTap(e.value),
+                          delay: Duration(milliseconds: 50 + e.key * 40),
+                        ),
+                      ))
+                  .toList(),
             ),
           ),
-
           const SizedBox(height: 32),
-          
           Row(
             children: [
-              Icon(Icons.local_fire_department_outlined, size: 16, color: context.colors.accent),
+              Icon(Icons.local_fire_department_outlined,
+                  size: 16, color: context.colors.accent),
               const SizedBox(width: 8),
-              Text(
-                'Trending Terbaru (AI & CS)',
-                style: context.typography.labelSmall?.copyWith(
-                  fontSize: 10, color: context.colors.accent, letterSpacing: 0.8, fontWeight: FontWeight.w600,
+              Flexible(
+                child: Text(
+                  'Trending Terbaru (AI & CS)',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: context.typography.labelSmall?.copyWith(
+                    fontSize: 10,
+                    color: context.colors.accent,
+                    letterSpacing: 0.8,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
               ),
             ],
           ).animate(delay: 500.ms).fadeIn(duration: 300.ms),
-          
           const SizedBox(height: 16),
-          
           if (provider.isLoadingTrending)
             Center(
               child: Padding(
                 padding: const EdgeInsets.all(24.0),
-                child: CircularProgressIndicator(color: context.colors.accent, strokeWidth: 2),
+                child: CircularProgressIndicator(
+                    color: context.colors.accent, strokeWidth: 2),
               ),
             )
           else if (provider.trendingPapers.isNotEmpty)
@@ -581,7 +593,8 @@ class _EmptyStateState extends State<_EmptyState> {
                     onTap: () {
                       Navigator.push(
                         context,
-                        MaterialPageRoute(builder: (_) => PaperDetailScreen(paper: paper)),
+                        MaterialPageRoute(
+                            builder: (_) => PaperDetailScreen(paper: paper)),
                       );
                     },
                     index: i,
@@ -589,7 +602,6 @@ class _EmptyStateState extends State<_EmptyState> {
                 );
               },
             ),
-
           const SizedBox(height: 32),
           _SourceBadge(),
         ],
@@ -608,7 +620,7 @@ class _TypingHeroTextState extends State<_TypingHeroText> {
   String _displayedText = "";
   int _currentIndex = 0;
   bool _showCursor = true;
-  
+
   @override
   void initState() {
     super.initState();
@@ -618,7 +630,7 @@ class _TypingHeroTextState extends State<_TypingHeroText> {
   void _startTyping() async {
     await Future.delayed(const Duration(milliseconds: 300));
     if (!mounted) return;
-    
+
     while (_currentIndex < _fullText.length) {
       await Future.delayed(const Duration(milliseconds: 40));
       if (!mounted) return;
@@ -627,7 +639,7 @@ class _TypingHeroTextState extends State<_TypingHeroText> {
         _displayedText = _fullText.substring(0, _currentIndex);
       });
     }
-    
+
     for (int i = 0; i < 6; i++) {
       await Future.delayed(const Duration(milliseconds: 500));
       if (!mounted) return;
@@ -667,7 +679,8 @@ class _SuggestionChip extends StatefulWidget {
   final VoidCallback onTap;
   final Duration delay;
 
-  const _SuggestionChip({required this.text, required this.onTap, required this.delay});
+  const _SuggestionChip(
+      {required this.text, required this.onTap, required this.delay});
 
   @override
   State<_SuggestionChip> createState() => _SuggestionChipState();
@@ -679,35 +692,43 @@ class _SuggestionChipState extends State<_SuggestionChip> {
   @override
   Widget build(BuildContext context) {
     return PressFeedback(
-      scaleFactor: 0.98,
-      child: GestureDetector(
-      onTapDown: (_) => setState(() => _pressed = true),
-      onTapUp: (_) {
-        setState(() => _pressed = false);
-        widget.onTap();
-      },
-      onTapCancel: () => setState(() => _pressed = false),
-      child: AnimatedContainer(
-        duration: 120.ms,
-        width: double.infinity,
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
-        decoration: BoxDecoration(
-          color: _pressed ? context.colors.surface3 : context.colors.surface1,
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(
-            color: _pressed ? context.colors.accentDim : context.colors.borderSubtle,
-          ),
-        ),
-        child: Text(
-          widget.text,
-          style: GoogleFonts.sourceSerif4(
-            fontSize: 13,
-            color: context.colors.textSecondary,
-            height: 1.4,
-          ),
-        ),
-      ),
-    )).animate(delay: widget.delay).fadeIn(duration: 300.ms).slideY(begin: 0.04, end: 0, duration: 300.ms);
+            scaleFactor: 0.98,
+            child: GestureDetector(
+              onTapDown: (_) => setState(() => _pressed = true),
+              onTapUp: (_) {
+                setState(() => _pressed = false);
+                widget.onTap();
+              },
+              onTapCancel: () => setState(() => _pressed = false),
+              child: AnimatedContainer(
+                duration: 120.ms,
+                width: double.infinity,
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+                decoration: BoxDecoration(
+                  color: _pressed
+                      ? context.colors.surface3
+                      : context.colors.surface1,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: _pressed
+                        ? context.colors.accentDim
+                        : context.colors.borderSubtle,
+                  ),
+                ),
+                child: Text(
+                  widget.text,
+                  style: GoogleFonts.sourceSerif4(
+                    fontSize: 13,
+                    color: context.colors.textSecondary,
+                    height: 1.4,
+                  ),
+                ),
+              ),
+            ))
+        .animate(delay: widget.delay)
+        .fadeIn(duration: 300.ms)
+        .slideY(begin: 0.04, end: 0, duration: 300.ms);
   }
 }
 
@@ -725,15 +746,22 @@ class _SourceBadge extends StatelessWidget {
           child: Text(
             'arXiv.org',
             style: GoogleFonts.jetBrainsMono(
-              fontSize: 10, color: context.colors.textMuted, letterSpacing: 0.4,
+              fontSize: 10,
+              color: context.colors.textMuted,
+              letterSpacing: 0.4,
             ),
           ),
         ),
         const SizedBox(width: 8),
-        Text(
-          '· Open access · No API key required',
-          style: GoogleFonts.sourceSerif4(
-            fontSize: 11, color: context.colors.textMuted,
+        Flexible(
+          child: Text(
+            '· Open access · No API key required',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: GoogleFonts.sourceSerif4(
+              fontSize: 11,
+              color: context.colors.textMuted,
+            ),
           ),
         ),
       ],
@@ -791,7 +819,7 @@ class _InputAreaState extends State<_InputArea> {
     widget.controller.removeListener(_onTextChanged);
     super.dispose();
   }
-  
+
   @override
   void didUpdateWidget(_InputArea oldWidget) {
     super.didUpdateWidget(oldWidget);
@@ -806,7 +834,7 @@ class _InputAreaState extends State<_InputArea> {
     final text = widget.controller.text;
     final hasText = text.isNotEmpty;
     if (_hasText != hasText) setState(() => _hasText = hasText);
-    
+
     final showMenu = text.startsWith('/');
     if (_showSkillMenu != showMenu) setState(() => _showSkillMenu = showMenu);
   }
@@ -821,7 +849,7 @@ class _InputAreaState extends State<_InputArea> {
       if (picked != null && picked.path != null) {
         final path = picked.path!;
         final name = picked.name;
-        
+
         // Create a mock ArxivPaper for local PDF
         final mockPaper = ArxivPaper(
           id: 'local_${DateTime.now().millisecondsSinceEpoch}',
@@ -864,42 +892,44 @@ class _InputAreaState extends State<_InputArea> {
         mainAxisSize: MainAxisSize.min,
         children: AiSkill.values.where((s) => s != AiSkill.none).map((skill) {
           return PressFeedback(
-            scaleFactor: 0.98,
-            child: InkWell(
-            onTap: () {
-              provider.setActiveSkill(skill);
-              widget.controller.clear();
-              setState(() => _showSkillMenu = false);
-            },
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              child: Row(
-                children: [
-                  Icon(skill.icon, size: 18, color: context.colors.textPrimary),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          skill.displayName,
-                          style: context.typography.labelLarge?.copyWith(
-                            color: context.colors.textPrimary,
-                          ),
+              scaleFactor: 0.98,
+              child: InkWell(
+                onTap: () {
+                  provider.setActiveSkill(skill);
+                  widget.controller.clear();
+                  setState(() => _showSkillMenu = false);
+                },
+                child: Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  child: Row(
+                    children: [
+                      Icon(skill.icon,
+                          size: 18, color: context.colors.textPrimary),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              skill.displayName,
+                              style: context.typography.labelLarge?.copyWith(
+                                color: context.colors.textPrimary,
+                              ),
+                            ),
+                            Text(
+                              skill.command,
+                              style: context.typography.labelSmall?.copyWith(
+                                color: context.colors.textMuted,
+                              ),
+                            ),
+                          ],
                         ),
-                        Text(
-                          skill.command,
-                          style: context.typography.labelSmall?.copyWith(
-                            color: context.colors.textMuted,
-                          ),
-                        ),
-                      ],
-                    ),
+                      ),
+                    ],
                   ),
-                ],
-              ),
-            ),
-          ));
+                ),
+              ));
         }).toList(),
       ),
     );
@@ -930,16 +960,18 @@ class _InputAreaState extends State<_InputArea> {
             ),
           ),
           PressFeedback(
-            scaleFactor: 0.9,
-            child: InkWell(
-            onTap: () => context.read<SciChatProvider>().setActiveSkill(AiSkill.none),
-            borderRadius: BorderRadius.circular(10),
-            child: SizedBox(
-              width: 32,
-              height: 32,
-              child: Icon(Icons.close, size: 16, color: c.textMuted),
-            ),
-          )),
+              scaleFactor: 0.9,
+              child: InkWell(
+                onTap: () => context
+                    .read<SciChatProvider>()
+                    .setActiveSkill(AiSkill.none),
+                borderRadius: BorderRadius.circular(10),
+                child: SizedBox(
+                  width: 32,
+                  height: 32,
+                  child: Icon(Icons.close, size: 16, color: c.textMuted),
+                ),
+              )),
         ],
       ),
     );
@@ -951,73 +983,101 @@ class _InputAreaState extends State<_InputArea> {
       height: 36,
       width: 36,
       child: PressFeedback(
-        scaleFactor: 0.92,
-        child: PopupMenuButton<String>(
-        padding: EdgeInsets.zero,
-        icon: Icon(Icons.add_circle_outline, size: 22, color: context.colors.textSecondary),
-        tooltip: 'Menu Tambahan',
-        color: context.colors.surface1,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        onSelected: (value) {
-          if (value == 'deep') {
-            provider.toggleDeepSearch();
-          } else if (value == 'eli5') {
-            provider.toggleEli5Mode();
-          } else if (value.startsWith('skill_')) {
-            final skillName = value.substring(6);
-            final skill = AiSkill.values.firstWhere((s) => s.name == skillName);
-            provider.setActiveSkill(skill);
-          }
-        },
-        itemBuilder: (BuildContext context) {
-          return [
-            PopupMenuItem(
-              value: 'deep',
-              child: Row(
-                children: [
-                  Icon(Icons.travel_explore, size: 18, color: provider.deepSearch ? context.colors.accent : context.colors.textPrimary),
-                  const SizedBox(width: 12),
-                  Text('Deep Search', style: context.typography.bodyMedium),
-                  const Spacer(),
-                  if (provider.deepSearch) Icon(Icons.check, size: 18, color: context.colors.accent),
-                ],
-              ),
-            ),
-            PopupMenuItem(
-              value: 'eli5',
-              child: Row(
-                children: [
-                  Icon(Icons.child_care, size: 18, color: provider.eli5Mode ? context.colors.accent : context.colors.textPrimary),
-                  const SizedBox(width: 12),
-                  Text('ELI5 Mode', style: context.typography.bodyMedium),
-                  const Spacer(),
-                  if (provider.eli5Mode) Icon(Icons.check, size: 18, color: context.colors.accent),
-                ],
-              ),
-            ),
-            const PopupMenuDivider(),
-            ...AiSkill.values.where((s) => s != AiSkill.none).map((skill) => PopupMenuItem(
-              value: 'skill_${skill.name}',
-              child: Row(
-                children: [
-                  Icon(skill.icon, size: 18, color: provider.activeSkill == skill ? context.colors.accent : context.colors.textPrimary),
-                  const SizedBox(width: 12),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
+          scaleFactor: 0.92,
+          child: PopupMenuButton<String>(
+            padding: EdgeInsets.zero,
+            icon:
+                Icon(Icons.add, size: 22, color: context.colors.textSecondary),
+            tooltip: 'Menu Tambahan',
+            color: context.colors.surface1,
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            onSelected: (value) {
+              if (value == 'deep') {
+                provider.toggleDeepSearch();
+              } else if (value == 'eli5') {
+                provider.toggleEli5Mode();
+              } else if (value.startsWith('skill_')) {
+                final skillName = value.substring(6);
+                final skill =
+                    AiSkill.values.firstWhere((s) => s.name == skillName);
+                provider.setActiveSkill(skill);
+              }
+            },
+            itemBuilder: (BuildContext context) {
+              return [
+                PopupMenuItem(
+                  value: 'deep',
+                  child: Row(
                     children: [
-                      Text(skill.displayName, style: context.typography.bodyMedium),
-                      Text(skill.command, style: context.typography.labelSmall?.copyWith(color: context.colors.textMuted, fontSize: 10)),
+                      Icon(Icons.travel_explore,
+                          size: 18,
+                          color: provider.deepSearch
+                              ? context.colors.accent
+                              : context.colors.textPrimary),
+                      const SizedBox(width: 12),
+                      Text('Deep Search', style: context.typography.bodyMedium),
+                      const Spacer(),
+                      if (provider.deepSearch)
+                        Icon(Icons.check,
+                            size: 18, color: context.colors.accent),
                     ],
                   ),
-                  const Spacer(),
-                  if (provider.activeSkill == skill) Icon(Icons.check, size: 18, color: context.colors.accent),
-                ],
-              ),
-            )),
-          ];
-        },
-      )),
+                ),
+                PopupMenuItem(
+                  value: 'eli5',
+                  child: Row(
+                    children: [
+                      Icon(Icons.child_care,
+                          size: 18,
+                          color: provider.eli5Mode
+                              ? context.colors.accent
+                              : context.colors.textPrimary),
+                      const SizedBox(width: 12),
+                      Text('ELI5 Mode', style: context.typography.bodyMedium),
+                      const Spacer(),
+                      if (provider.eli5Mode)
+                        Icon(Icons.check,
+                            size: 18, color: context.colors.accent),
+                    ],
+                  ),
+                ),
+                const PopupMenuDivider(),
+                ...AiSkill.values
+                    .where((s) => s != AiSkill.none)
+                    .map((skill) => PopupMenuItem(
+                          value: 'skill_${skill.name}',
+                          child: Row(
+                            children: [
+                              Icon(skill.icon,
+                                  size: 18,
+                                  color: provider.activeSkill == skill
+                                      ? context.colors.accent
+                                      : context.colors.textPrimary),
+                              const SizedBox(width: 12),
+                              Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text(skill.displayName,
+                                      style: context.typography.bodyMedium),
+                                  Text(skill.command,
+                                      style: context.typography.labelSmall
+                                          ?.copyWith(
+                                              color: context.colors.textMuted,
+                                              fontSize: 10)),
+                                ],
+                              ),
+                              const Spacer(),
+                              if (provider.activeSkill == skill)
+                                Icon(Icons.check,
+                                    size: 18, color: context.colors.accent),
+                            ],
+                          ),
+                        )),
+              ];
+            },
+          )),
     );
   }
 
@@ -1053,51 +1113,50 @@ class _InputAreaState extends State<_InputArea> {
               ),
             ),
             PressFeedback(
-              scaleFactor: 0.9,
-              child: InkWell(
-              onTap: widget.onCancelAttachment,
-              borderRadius: BorderRadius.circular(10),
-              child: SizedBox(
-                width: 32,
-                height: 32,
-                child: Icon(Icons.close, size: 16, color: c.textMuted),
-              ),
-            )),
+                scaleFactor: 0.9,
+                child: InkWell(
+                  onTap: widget.onCancelAttachment,
+                  borderRadius: BorderRadius.circular(10),
+                  child: SizedBox(
+                    width: 32,
+                    height: 32,
+                    child: Icon(Icons.close, size: 16, color: c.textMuted),
+                  ),
+                )),
           ],
         ),
       );
     }
 
-    // Idle state: ghost action that names what it does
-    return PressFeedback(
-      scaleFactor: 0.96,
-      child: InkWell(
-      onTap: _pickPdfFile,
-      borderRadius: BorderRadius.circular(10),
-      child: Container(
-        constraints: const BoxConstraints(minHeight: 36),
-        padding: const EdgeInsets.symmetric(horizontal: 10),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: c.borderSubtle, width: 1),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.attach_file_rounded, size: 16, color: c.textSecondary),
-            const SizedBox(width: 6),
-            Text(
-              'Lampirkan PDF',
-              style: GoogleFonts.sourceSerif4(
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-                color: c.textSecondary,
+    // Idle state: compact paperclip attachment action
+    return Tooltip(
+      message: 'Lampirkan PDF',
+      child: Semantics(
+        label: 'Lampirkan PDF',
+        button: true,
+        child: SizedBox(
+          width: 36,
+          height: 36,
+          child: PressFeedback(
+            scaleFactor: 0.92,
+            child: InkWell(
+              onTap: _pickPdfFile,
+              borderRadius: BorderRadius.circular(10),
+              child: Container(
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: c.borderSubtle, width: 1),
+                ),
+                child: Center(
+                  child: Icon(Icons.attach_file_rounded,
+                      size: 18, color: c.textSecondary),
+                ),
               ),
             ),
-          ],
+          ),
         ),
       ),
-    ));
+    );
   }
 
   @override
@@ -1110,7 +1169,9 @@ class _InputAreaState extends State<_InputArea> {
         12,
         8,
         12,
-        math.max(MediaQuery.of(context).viewInsets.bottom, MediaQuery.of(context).padding.bottom) + 12,
+        math.max(MediaQuery.of(context).viewInsets.bottom,
+                MediaQuery.of(context).padding.bottom) +
+            12,
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -1139,11 +1200,12 @@ class _InputAreaState extends State<_InputArea> {
                 children: [
                   Row(
                     children: [
-                      Icon(Icons.library_books_outlined, size: 14, color: c.accent),
+                      Icon(Icons.library_books_outlined,
+                          size: 14, color: c.accent),
                       const SizedBox(width: 6),
                       Text(
-                        widget.activeContexts.length > 1 
-                            ? '${widget.activeContexts.length} Makalah Aktif' 
+                        widget.activeContexts.length > 1
+                            ? '${widget.activeContexts.length} Makalah Aktif'
                             : 'Active Paper Context',
                         style: GoogleFonts.jetBrainsMono(
                           fontSize: 10,
@@ -1161,33 +1223,48 @@ class _InputAreaState extends State<_InputArea> {
                       if (evidence.level == EvidenceLevel.loading) {
                         evidenceWidget = Row(
                           children: [
-                            SizedBox(width: 8, height: 8, child: CircularProgressIndicator(strokeWidth: 1.5, color: c.textMuted)),
+                            SizedBox(
+                                width: 8,
+                                height: 8,
+                                child: CircularProgressIndicator(
+                                    strokeWidth: 1.5, color: c.textMuted)),
                             const SizedBox(width: 4),
-                            Text('Memeriksa...', style: GoogleFonts.sourceSerif4(fontSize: 10, color: c.textMuted)),
+                            Text('Memeriksa...',
+                                style: GoogleFonts.sourceSerif4(
+                                    fontSize: 10, color: c.textMuted)),
                           ],
                         );
                       } else if (evidence.level == EvidenceLevel.fullText) {
                         evidenceWidget = Row(
                           children: [
-                            Icon(Icons.check_circle_outline, size: 10, color: Colors.green[600]),
+                            Icon(Icons.check_circle_outline,
+                                size: 10, color: Colors.green[600]),
                             const SizedBox(width: 4),
-                            Text('Full text tersedia', style: GoogleFonts.sourceSerif4(fontSize: 10, color: Colors.green[600])),
+                            Text('Full text tersedia',
+                                style: GoogleFonts.sourceSerif4(
+                                    fontSize: 10, color: Colors.green[600])),
                           ],
                         );
                       } else if (evidence.level == EvidenceLevel.abstractOnly) {
                         evidenceWidget = Row(
                           children: [
-                            Icon(Icons.article_outlined, size: 10, color: Colors.orange[700]),
+                            Icon(Icons.article_outlined,
+                                size: 10, color: Colors.orange[700]),
                             const SizedBox(width: 4),
-                            Text('Abstract saja', style: GoogleFonts.sourceSerif4(fontSize: 10, color: Colors.orange[700])),
+                            Text('Abstract saja',
+                                style: GoogleFonts.sourceSerif4(
+                                    fontSize: 10, color: Colors.orange[700])),
                           ],
                         );
                       } else {
                         evidenceWidget = Row(
                           children: [
-                            Icon(Icons.error_outline, size: 10, color: Colors.red[600]),
+                            Icon(Icons.error_outline,
+                                size: 10, color: Colors.red[600]),
                             const SizedBox(width: 4),
-                            Text('Teks tidak tersedia', style: GoogleFonts.sourceSerif4(fontSize: 10, color: Colors.red[600])),
+                            Text('Teks tidak tersedia',
+                                style: GoogleFonts.sourceSerif4(
+                                    fontSize: 10, color: Colors.red[600])),
                           ],
                         );
                       }
@@ -1218,19 +1295,20 @@ class _InputAreaState extends State<_InputArea> {
                             ),
                           ),
                           PressFeedback(
-                            scaleFactor: 0.9,
-                            child: InkWell(
-                            onTap: () => widget.onRemoveContext(paper.id),
-                            borderRadius: BorderRadius.circular(12),
-                            child: Padding(
-                              padding: const EdgeInsets.all(4),
-                              child: Icon(Icons.close, size: 16, color: c.textMuted),
-                            ),
-                          )),
+                              scaleFactor: 0.9,
+                              child: InkWell(
+                                onTap: () => widget.onRemoveContext(paper.id),
+                                borderRadius: BorderRadius.circular(12),
+                                child: Padding(
+                                  padding: const EdgeInsets.all(4),
+                                  child: Icon(Icons.close,
+                                      size: 16, color: c.textMuted),
+                                ),
+                              )),
                         ],
                       ),
                     );
-                  }).toList(),
+                  }),
                 ],
               ),
             ),
@@ -1252,7 +1330,7 @@ class _InputAreaState extends State<_InputArea> {
                 width: 1,
               ),
             ),
-            padding: const EdgeInsets.fromLTRB(14, 6, 8, 8),
+            padding: const EdgeInsets.fromLTRB(14, 4, 8, 6),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1261,7 +1339,7 @@ class _InputAreaState extends State<_InputArea> {
                   controller: widget.controller,
                   focusNode: widget.focusNode,
                   enabled: widget.apiKeySet && !widget.isLoading,
-                  maxLines: 6,
+                  maxLines: 5,
                   minLines: 1,
                   textInputAction: TextInputAction.send,
                   onSubmitted: (_) => widget.onSend(),
@@ -1274,7 +1352,9 @@ class _InputAreaState extends State<_InputArea> {
                   decoration: InputDecoration(
                     hintText: widget.apiKeySet
                         ? (widget.activeContexts.isNotEmpty
-                            ? (widget.activeContexts.length == 1 ? 'Tanya isi PDF ini…' : 'Bandingkan ${widget.activeContexts.length} makalah…')
+                            ? (widget.activeContexts.length == 1
+                                ? 'Tanya isi PDF ini…'
+                                : 'Bandingkan ${widget.activeContexts.length} makalah…')
                             : 'Tanya soal paper, metode, atau hasil riset…')
                         : 'Isi Gemini API key di pengaturan dulu',
                     filled: false,
@@ -1283,7 +1363,7 @@ class _InputAreaState extends State<_InputArea> {
                     enabledBorder: InputBorder.none,
                     focusedBorder: InputBorder.none,
                     disabledBorder: InputBorder.none,
-                    contentPadding: const EdgeInsets.fromLTRB(2, 10, 6, 8),
+                    contentPadding: const EdgeInsets.fromLTRB(2, 6, 6, 6),
                     hintStyle: GoogleFonts.sourceSerif4(
                       fontSize: 16,
                       color: c.textMuted,
@@ -1301,7 +1381,8 @@ class _InputAreaState extends State<_InputArea> {
                             _buildAddMenu(context),
                             const SizedBox(width: 8),
                             _buildAttachControl(context),
-                            if (context.watch<SciChatProvider>().activeSkill != AiSkill.none) ...[
+                            if (context.watch<SciChatProvider>().activeSkill !=
+                                AiSkill.none) ...[
                               const SizedBox(width: 8),
                               _buildSkillChip(context),
                             ],
@@ -1333,12 +1414,11 @@ class _SendButton extends StatefulWidget {
   final bool hasText;
   final VoidCallback onTap;
 
-  const _SendButton({
-    required this.isLoading, 
-    required this.apiKeySet, 
-    required this.hasText,
-    required this.onTap
-  });
+  const _SendButton(
+      {required this.isLoading,
+      required this.apiKeySet,
+      required this.hasText,
+      required this.onTap});
 
   @override
   State<_SendButton> createState() => _SendButtonState();
@@ -1350,44 +1430,58 @@ class _SendButtonState extends State<_SendButton> {
   @override
   Widget build(BuildContext context) {
     final enabled = widget.apiKeySet && !widget.isLoading && widget.hasText;
-    
-    return GestureDetector(
-      onTapDown: enabled ? (_) => setState(() => _pressed = true) : null,
-      onTapUp: enabled ? (_) {
-        setState(() => _pressed = false);
-        HapticFeedback.lightImpact();
-        widget.onTap();
-      } : null,
-      onTapCancel: () => setState(() => _pressed = false),
-      child: AnimatedScale(
-        scale: _pressed ? 0.94 : 1.0,
-        duration: 120.ms,
-        curve: Curves.easeOut,
-        child: AnimatedContainer(
-        duration: 160.ms,
-        width: 40,
-        height: 36,
-        decoration: BoxDecoration(
-          color: enabled ? context.colors.textPrimary : context.colors.surface3,
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: widget.isLoading
-            ? Center(
-                child: SizedBox(
-                  width: 16,
-                  height: 16,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    color: context.colors.surface0,
-                  ),
-                ),
-              )
-            : Icon(
-                Icons.arrow_upward_rounded,
-                size: 20,
-                color: enabled ? context.colors.surface0 : context.colors.textMuted,
+
+    return Tooltip(
+      message: 'Kirim pesan',
+      child: Semantics(
+        label: 'Kirim pesan',
+        button: true,
+        enabled: enabled,
+        child: GestureDetector(
+          onTapDown: enabled ? (_) => setState(() => _pressed = true) : null,
+          onTapUp: enabled
+              ? (_) {
+                  setState(() => _pressed = false);
+                  HapticFeedback.lightImpact();
+                  widget.onTap();
+                }
+              : null,
+          onTapCancel: () => setState(() => _pressed = false),
+          child: AnimatedScale(
+            scale: _pressed ? 0.94 : 1.0,
+            duration: 120.ms,
+            curve: Curves.easeOut,
+            child: AnimatedContainer(
+              duration: 160.ms,
+              width: 40,
+              height: 36,
+              decoration: BoxDecoration(
+                color: enabled
+                    ? context.colors.textPrimary
+                    : context.colors.surface3,
+                borderRadius: BorderRadius.circular(12),
               ),
-      ),
+              child: widget.isLoading
+                  ? Center(
+                      child: SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: context.colors.surface0,
+                        ),
+                      ),
+                    )
+                  : Icon(
+                      Icons.arrow_upward_rounded,
+                      size: 20,
+                      color: enabled
+                          ? context.colors.surface0
+                          : context.colors.textMuted,
+                    ),
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -1440,7 +1534,7 @@ class _SummarizeSheetState extends State<_SummarizeSheet> {
       builder: (_, controller) => Container(
         decoration: BoxDecoration(
           color: context.colors.surface1,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
         ),
         child: Column(
           children: [
@@ -1464,7 +1558,8 @@ class _SummarizeSheetState extends State<_SummarizeSheet> {
                   Text(
                     'AI Summary',
                     style: GoogleFonts.playfairDisplay(
-                      fontSize: 18, fontWeight: FontWeight.w700,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w700,
                       color: context.colors.textPrimary,
                     ),
                   ),
@@ -1472,8 +1567,10 @@ class _SummarizeSheetState extends State<_SummarizeSheet> {
                   Text(
                     widget.paper.title,
                     style: GoogleFonts.sourceSerif4(
-                      fontSize: 13, color: context.colors.textMuted,
-                      fontStyle: FontStyle.italic, height: 1.4,
+                      fontSize: 13,
+                      color: context.colors.textMuted,
+                      fontStyle: FontStyle.italic,
+                      height: 1.4,
                     ),
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
@@ -1487,7 +1584,8 @@ class _SummarizeSheetState extends State<_SummarizeSheet> {
               child: _loading
                   ? Center(
                       child: CircularProgressIndicator(
-                        color: context.colors.accent, strokeWidth: 2,
+                        color: context.colors.accent,
+                        strokeWidth: 2,
                       ),
                     )
                   : _error != null
@@ -1495,53 +1593,73 @@ class _SummarizeSheetState extends State<_SummarizeSheet> {
                           child: Text(
                             _error!,
                             style: GoogleFonts.sourceSerif4(
-                              color: const Color(0xFFB05050), fontSize: 13,
+                              color: const Color(0xFFB05050),
+                              fontSize: 13,
                             ),
                           ),
                         )
                       : SingleChildScrollView(
                           controller: controller,
                           padding: const EdgeInsets.fromLTRB(20, 16, 20, 32),
-                            child: MarkdownBody(
-                              data: _summary ?? '',
-                              selectable: true,
-                              builders: {
-                                'latex': CustomLatexElementBuilder(context),
-                              },
-                              extensionSet: md.ExtensionSet(
-                                [MathBlockSyntax(), ...md.ExtensionSet.gitHubFlavored.blockSyntaxes],
-                                [MathInlineSyntax(), ...md.ExtensionSet.gitHubFlavored.inlineSyntaxes],
-                              ),
-                              styleSheet: MarkdownStyleSheet(
-                                p: context.typography.bodyLarge,
-                                pPadding: const EdgeInsets.only(bottom: 16),
-                                strong: context.typography.bodyLarge?.copyWith(fontWeight: FontWeight.w700),
-                                em: context.typography.bodyLarge?.copyWith(fontStyle: FontStyle.italic, color: context.colors.textSecondary),
-                                h1: context.typography.headlineLarge,
-                                h1Padding: const EdgeInsets.only(top: 20, bottom: 8),
-                                h2: context.typography.headlineMedium,
-                                h2Padding: const EdgeInsets.only(top: 20, bottom: 8),
-                                h3: context.typography.headlineSmall?.copyWith(color: context.colors.accent),
-                                h3Padding: const EdgeInsets.only(top: 16, bottom: 8),
-                                code: context.typography.bodySmall?.copyWith(
-                                  fontFamily: GoogleFonts.jetBrainsMono().fontFamily, 
-                                  color: context.colors.accent, 
-                                  backgroundColor: context.colors.surface3
-                                ),
-                                codeblockDecoration: BoxDecoration(
-                                  color: context.colors.surface2,
-                                  borderRadius: BorderRadius.circular(8),
-                                  border: Border.all(color: context.colors.borderSubtle),
-                                ),
-                                blockquotePadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                                blockquoteDecoration: BoxDecoration(
-                                  border: Border(left: BorderSide(color: context.colors.accentDim, width: 3)),
-                                  color: context.colors.accentFaint,
-                                ),
-                                listBullet: context.typography.bodyLarge,
-                                listBulletPadding: const EdgeInsets.only(bottom: 8),
-                              ),
+                          child: MarkdownBody(
+                            data: _summary ?? '',
+                            selectable: true,
+                            builders: {
+                              'latex': CustomLatexElementBuilder(context),
+                            },
+                            extensionSet: md.ExtensionSet(
+                              [
+                                const MathBlockSyntax(),
+                                ...md.ExtensionSet.gitHubFlavored.blockSyntaxes
+                              ],
+                              [
+                                MathInlineSyntax(),
+                                ...md.ExtensionSet.gitHubFlavored.inlineSyntaxes
+                              ],
                             ),
+                            styleSheet: MarkdownStyleSheet(
+                              p: context.typography.bodyLarge,
+                              pPadding: const EdgeInsets.only(bottom: 16),
+                              strong: context.typography.bodyLarge
+                                  ?.copyWith(fontWeight: FontWeight.w700),
+                              em: context.typography.bodyLarge?.copyWith(
+                                  fontStyle: FontStyle.italic,
+                                  color: context.colors.textSecondary),
+                              h1: context.typography.headlineLarge,
+                              h1Padding:
+                                  const EdgeInsets.only(top: 20, bottom: 8),
+                              h2: context.typography.headlineMedium,
+                              h2Padding:
+                                  const EdgeInsets.only(top: 20, bottom: 8),
+                              h3: context.typography.headlineSmall
+                                  ?.copyWith(color: context.colors.accent),
+                              h3Padding:
+                                  const EdgeInsets.only(top: 16, bottom: 8),
+                              code: context.typography.bodySmall?.copyWith(
+                                  fontFamily:
+                                      GoogleFonts.jetBrainsMono().fontFamily,
+                                  color: context.colors.accent,
+                                  backgroundColor: context.colors.surface3),
+                              codeblockDecoration: BoxDecoration(
+                                color: context.colors.surface2,
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(
+                                    color: context.colors.borderSubtle),
+                              ),
+                              blockquotePadding: const EdgeInsets.symmetric(
+                                  horizontal: 16, vertical: 8),
+                              blockquoteDecoration: BoxDecoration(
+                                border: Border(
+                                    left: BorderSide(
+                                        color: context.colors.accentDim,
+                                        width: 3)),
+                                color: context.colors.accentFaint,
+                              ),
+                              listBullet: context.typography.bodyLarge,
+                              listBulletPadding:
+                                  const EdgeInsets.only(bottom: 8),
+                            ),
+                          ),
                         ),
             ),
           ],
@@ -1584,10 +1702,10 @@ class _ChatDrawer extends StatelessWidget {
                 ],
               ),
             ),
-            
+
             const SizedBox(height: 16),
             Divider(color: context.colors.borderSubtle, height: 1),
-            
+
             // Session List
             Expanded(
               child: ListView.builder(
@@ -1595,89 +1713,102 @@ class _ChatDrawer extends StatelessWidget {
                 itemBuilder: (ctx, i) {
                   final session = sessions[i];
                   final isActive = session.id == provider.activeSessionId;
-                  
+
                   return PressFeedback(
-                    scaleFactor: 0.985,
-                    child: ListTile(
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                    tileColor: isActive ? context.colors.surface2 : Colors.transparent,
-                    leading: Icon(
-                      Icons.chat_bubble_outline,
-                      size: 20,
-                      color: isActive ? context.colors.accent : context.colors.textMuted,
-                    ),
-                    title: Text(
-                      session.title,
-                      style: context.typography.bodyMedium?.copyWith(
-                        color: isActive ? context.colors.textPrimary : context.colors.textSecondary,
-                        fontWeight: isActive ? FontWeight.w600 : FontWeight.w400,
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    trailing: IconButton(
-                      icon: Icon(Icons.delete_outline, size: 18, color: context.colors.textMuted),
-                      onPressed: () {
-                        provider.deleteSession(session.id);
-                      },
-                    ),
-                    onTap: () {
-                      provider.loadSession(session.id);
-                      Navigator.pop(context);
-                    },
-                  ));
+                      scaleFactor: 0.985,
+                      child: ListTile(
+                        contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 16, vertical: 4),
+                        tileColor: isActive
+                            ? context.colors.surface2
+                            : Colors.transparent,
+                        leading: Icon(
+                          Icons.chat_bubble_outline,
+                          size: 20,
+                          color: isActive
+                              ? context.colors.accent
+                              : context.colors.textMuted,
+                        ),
+                        title: Text(
+                          session.title,
+                          style: context.typography.bodyMedium?.copyWith(
+                            color: isActive
+                                ? context.colors.textPrimary
+                                : context.colors.textSecondary,
+                            fontWeight:
+                                isActive ? FontWeight.w600 : FontWeight.w400,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        trailing: IconButton(
+                          icon: Icon(Icons.delete_outline,
+                              size: 18, color: context.colors.textMuted),
+                          onPressed: () {
+                            provider.deleteSession(session.id);
+                          },
+                        ),
+                        onTap: () {
+                          provider.loadSession(session.id);
+                          Navigator.pop(context);
+                        },
+                      ));
                 },
               ),
             ),
-            
+
             // Footer
             Divider(color: context.colors.borderSubtle, height: 1),
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
               child: PressFeedback(
-                scaleFactor: 0.97,
-                child: ElevatedButton.icon(
-                onPressed: () {
-                  provider.createNewSession();
-                  Navigator.pop(context); // Close drawer
-                },
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: context.colors.accent,
-                  foregroundColor: context.colors.surface0,
-                  padding: const EdgeInsets.symmetric(vertical: 12),
-                  elevation: 0,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                ),
-                icon: const Icon(Icons.edit_square, size: 20),
-                label: Text(
-                  'Obrolan Baru',
-                  style: GoogleFonts.sourceSerif4(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              )),
+                  scaleFactor: 0.97,
+                  child: ElevatedButton.icon(
+                    onPressed: () {
+                      provider.createNewSession();
+                      Navigator.pop(context); // Close drawer
+                    },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: context.colors.accent,
+                      foregroundColor: context.colors.surface0,
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      elevation: 0,
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8)),
+                    ),
+                    icon: const Icon(Icons.edit_square, size: 20),
+                    label: Text(
+                      'Obrolan Baru',
+                      style: GoogleFonts.sourceSerif4(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  )),
             ),
             PressFeedback(
-              scaleFactor: 0.985,
-              child: ListTile(
-              contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 0),
-              leading: Icon(Icons.menu_book, color: context.colors.textSecondary),
-              title: Text(
-                'Panduan Riset',
-                style: context.typography.bodyMedium?.copyWith(
-                  fontWeight: FontWeight.w600,
-                  color: context.colors.textPrimary,
-                ),
-              ),
-              onTap: () {
-                Navigator.pop(context); // Close drawer first
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (context) => const GuideScreen()),
-                );
-              },
-            )),
+                scaleFactor: 0.985,
+                child: ListTile(
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 0),
+                  leading: Icon(Icons.menu_book,
+                      color: context.colors.textSecondary),
+                  title: Text(
+                    'Panduan Riset',
+                    style: context.typography.bodyMedium?.copyWith(
+                      fontWeight: FontWeight.w600,
+                      color: context.colors.textPrimary,
+                    ),
+                  ),
+                  onTap: () {
+                    Navigator.pop(context); // Close drawer first
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                          builder: (context) => const GuideScreen()),
+                    );
+                  },
+                )),
             const SizedBox(height: 8),
           ],
         ),
@@ -1685,6 +1816,3 @@ class _ChatDrawer extends StatelessWidget {
     );
   }
 }
-
-
-

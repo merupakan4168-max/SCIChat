@@ -97,7 +97,8 @@ class _UserBubble extends StatelessWidget {
                 if (message.attachmentName != null)
                   Container(
                     margin: const EdgeInsets.only(bottom: 6),
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                     decoration: BoxDecoration(
                       color: context.colors.surface1,
                       borderRadius: BorderRadius.circular(10),
@@ -106,7 +107,8 @@ class _UserBubble extends StatelessWidget {
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Icon(Icons.description_outlined, size: 18, color: context.colors.accent),
+                        Icon(Icons.description_outlined,
+                            size: 18, color: context.colors.accent),
                         const SizedBox(width: 8),
                         Flexible(
                           child: Text(
@@ -122,7 +124,8 @@ class _UserBubble extends StatelessWidget {
                     ),
                   ),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                   decoration: BoxDecoration(
                     color: context.colors.accentFaint,
                     borderRadius: const BorderRadius.only(
@@ -131,7 +134,8 @@ class _UserBubble extends StatelessWidget {
                       bottomLeft: Radius.circular(12),
                       bottomRight: Radius.circular(12),
                     ),
-                    border: Border.all(color: context.colors.accentDim.withValues(alpha: 0.3)),
+                    border: Border.all(
+                        color: context.colors.accentDim.withValues(alpha: 0.3)),
                   ),
                   child: MessageContent(content: message.content),
                 ),
@@ -218,7 +222,8 @@ class _AssistantBubble extends StatelessWidget {
             if (message.status == MessageStatus.sending)
               _ThinkingIndicator()
             else if (message.status == MessageStatus.error) ...[
-              if (message.content.isNotEmpty && !message.content.startsWith('Error:')) ...[
+              if (message.content.isNotEmpty &&
+                  !message.content.startsWith('Error:')) ...[
                 MessageContent(content: message.content),
                 const SizedBox(height: 8),
               ],
@@ -334,7 +339,8 @@ class _SourcesSectionState extends State<_SourcesSection> {
     if (widget.papers.isEmpty) return const SizedBox.shrink();
 
     // Selama status sending atau streaming: tampilkan indikator ringkas agar teks AI menjadi fokus
-    if (widget.status == MessageStatus.sending || widget.status == MessageStatus.streaming) {
+    if (widget.status == MessageStatus.sending ||
+        widget.status == MessageStatus.streaming) {
       return Padding(
         padding: const EdgeInsets.only(top: 10, left: 2),
         child: Container(
@@ -347,7 +353,8 @@ class _SourcesSectionState extends State<_SourcesSection> {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(Icons.auto_stories_outlined, size: 14, color: context.colors.accent),
+              Icon(Icons.auto_stories_outlined,
+                  size: 14, color: context.colors.accent),
               const SizedBox(width: 8),
               Text(
                 'Menyiapkan ${widget.papers.length} sumber makalah…',
@@ -369,67 +376,73 @@ class _SourcesSectionState extends State<_SourcesSection> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           PressFeedback(
-            scaleFactor: 0.985,
-            child: InkWell(
-            onTap: () {
-              HapticFeedback.selectionClick();
-              setState(() => _isExpanded = !_isExpanded);
-            },
-            borderRadius: BorderRadius.circular(8),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              decoration: BoxDecoration(
-                color: context.colors.surface1,
+              scaleFactor: 0.985,
+              child: InkWell(
+                onTap: () {
+                  HapticFeedback.selectionClick();
+                  setState(() => _isExpanded = !_isExpanded);
+                },
                 borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: context.colors.borderSubtle),
-              ),
-              child: Row(
-                children: [
-                  Icon(Icons.library_books_outlined, size: 16, color: context.colors.accent),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      'Sumber makalah (${widget.papers.length})',
-                      style: context.typography.labelMedium?.copyWith(
-                        fontWeight: FontWeight.w600,
-                        color: context.colors.textPrimary,
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: context.colors.surface1,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: context.colors.borderSubtle),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.library_books_outlined,
+                          size: 16, color: context.colors.accent),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Sumber makalah (${widget.papers.length})',
+                          style: context.typography.labelMedium?.copyWith(
+                            fontWeight: FontWeight.w600,
+                            color: context.colors.textPrimary,
+                          ),
+                        ),
                       ),
-                    ),
+                      Text(
+                        _isExpanded ? 'Tutup' : 'Lihat',
+                        style: context.typography.labelSmall?.copyWith(
+                          color: context.colors.accent,
+                          fontWeight: FontWeight.w500,
+                          fontSize: 11,
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      Icon(
+                        _isExpanded ? Icons.expand_less : Icons.expand_more,
+                        size: 18,
+                        color: context.colors.textMuted,
+                      ),
+                    ],
                   ),
-                  Text(
-                    _isExpanded ? 'Tutup' : 'Lihat',
-                    style: context.typography.labelSmall?.copyWith(
-                      color: context.colors.accent,
-                      fontWeight: FontWeight.w500,
-                      fontSize: 11,
-                    ),
-                  ),
-                  const SizedBox(width: 4),
-                  Icon(
-                    _isExpanded ? Icons.expand_less : Icons.expand_more,
-                    size: 18,
-                    color: context.colors.textMuted,
-                  ),
-                ],
-              ),
-            ),
-          )),
+                ),
+              )),
           if (_isExpanded) ...[
             const SizedBox(height: 12),
             _TrendChart(papers: widget.papers),
             const SizedBox(height: 12),
             ...widget.papers.asMap().entries.map((e) => Padding(
-              padding: const EdgeInsets.only(bottom: 8),
-              child: PaperCard(
-                paper: e.value,
-                isFavorite: widget.isFavorite(e.value.id),
-                onFavoriteToggle: () => widget.onFavoriteToggle(e.value),
-                onTap: () => widget.onPaperTap(e.value),
-                onSummarize: widget.onSummarize != null ? () => widget.onSummarize!(e.value) : null,
-                onChatPdf: widget.onChatPdf != null ? () => widget.onChatPdf!(e.value) : null,
-                index: e.key,
-              ),
-            )),
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: PaperCard(
+                    paper: e.value,
+                    isFavorite: widget.isFavorite(e.value.id),
+                    onFavoriteToggle: () => widget.onFavoriteToggle(e.value),
+                    onTap: () => widget.onPaperTap(e.value),
+                    onSummarize: widget.onSummarize != null
+                        ? () => widget.onSummarize!(e.value)
+                        : null,
+                    onChatPdf: widget.onChatPdf != null
+                        ? () => widget.onChatPdf!(e.value)
+                        : null,
+                    index: e.key,
+                  ),
+                )),
           ],
         ],
       ),
@@ -446,11 +459,14 @@ class MessageContent extends StatelessWidget {
 
     final trimmed = href.trim();
     final uri = Uri.tryParse(trimmed);
-    if (uri == null || !uri.hasScheme || (uri.scheme != 'https' && uri.scheme != 'http')) {
+    if (uri == null ||
+        !uri.hasScheme ||
+        (uri.scheme != 'https' && uri.scheme != 'http')) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Tautan ditolak demi keamanan (hanya HTTP/HTTPS yang didukung).'),
+            content: Text(
+                'Tautan ditolak demi keamanan (hanya HTTP/HTTPS yang didukung).'),
             behavior: SnackBarBehavior.floating,
           ),
         );
@@ -459,7 +475,8 @@ class MessageContent extends StatelessWidget {
     }
 
     try {
-      final launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
+      final launched =
+          await launchUrl(uri, mode: LaunchMode.externalApplication);
       if (!launched && context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -491,25 +508,41 @@ class MessageContent extends StatelessWidget {
         'code': _CodeElementBuilder(context),
       },
       extensionSet: md.ExtensionSet(
-        [const MathBlockSyntax(), ...md.ExtensionSet.gitHubFlavored.blockSyntaxes],
+        [
+          const MathBlockSyntax(),
+          ...md.ExtensionSet.gitHubFlavored.blockSyntaxes
+        ],
         [MathInlineSyntax(), ...md.ExtensionSet.gitHubFlavored.inlineSyntaxes],
       ),
       styleSheet: MarkdownStyleSheet(
         p: context.typography.bodyLarge?.copyWith(height: 1.5),
         pPadding: const EdgeInsets.only(bottom: 14),
-        strong: context.typography.bodyLarge?.copyWith(fontWeight: FontWeight.bold),
+        strong:
+            context.typography.bodyLarge?.copyWith(fontWeight: FontWeight.bold),
         em: context.typography.bodyLarge?.copyWith(fontStyle: FontStyle.italic),
-        h1: context.typography.headlineLarge?.copyWith(color: context.colors.accent, fontWeight: FontWeight.bold, fontSize: 24),
+        h1: context.typography.headlineLarge?.copyWith(
+            color: context.colors.accent,
+            fontWeight: FontWeight.bold,
+            fontSize: 24),
         h1Padding: const EdgeInsets.only(top: 24, bottom: 12),
-        h2: context.typography.headlineMedium?.copyWith(color: context.colors.accent, fontWeight: FontWeight.w600, fontSize: 20),
+        h2: context.typography.headlineMedium?.copyWith(
+            color: context.colors.accent,
+            fontWeight: FontWeight.w600,
+            fontSize: 20),
         h2Padding: const EdgeInsets.only(top: 20, bottom: 10),
-        h3: context.typography.headlineSmall?.copyWith(color: context.colors.textPrimary, fontWeight: FontWeight.w600, fontSize: 18),
+        h3: context.typography.headlineSmall?.copyWith(
+            color: context.colors.textPrimary,
+            fontWeight: FontWeight.w600,
+            fontSize: 18),
         h3Padding: const EdgeInsets.only(top: 16, bottom: 8),
-        h4: context.typography.titleMedium?.copyWith(color: context.colors.textPrimary, fontWeight: FontWeight.w600),
+        h4: context.typography.titleMedium?.copyWith(
+            color: context.colors.textPrimary, fontWeight: FontWeight.w600),
         h4Padding: const EdgeInsets.only(top: 16, bottom: 8),
-        h5: context.typography.titleSmall?.copyWith(color: context.colors.textSecondary, fontWeight: FontWeight.w600),
+        h5: context.typography.titleSmall?.copyWith(
+            color: context.colors.textSecondary, fontWeight: FontWeight.w600),
         h5Padding: const EdgeInsets.only(top: 16, bottom: 4),
-        h6: context.typography.titleSmall?.copyWith(color: context.colors.textMuted, fontWeight: FontWeight.w600),
+        h6: context.typography.titleSmall?.copyWith(
+            color: context.colors.textMuted, fontWeight: FontWeight.w600),
         h6Padding: const EdgeInsets.only(top: 16, bottom: 4),
         a: context.typography.bodyLarge?.copyWith(
           color: context.colors.accent,
@@ -517,7 +550,8 @@ class MessageContent extends StatelessWidget {
           decorationColor: context.colors.accent.withValues(alpha: 0.5),
         ),
         // Code styling is now handled by _CodeElementBuilder for 'code' tags
-        blockquotePadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        blockquotePadding:
+            const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         blockquoteDecoration: BoxDecoration(
           border: Border(
             left: BorderSide(color: context.colors.accentDim, width: 4),
@@ -528,17 +562,20 @@ class MessageContent extends StatelessWidget {
         listBulletPadding: const EdgeInsets.only(right: 8, bottom: 4),
         listIndent: 28,
         horizontalRuleDecoration: BoxDecoration(
-          border: Border(bottom: BorderSide(color: context.colors.borderSubtle)),
+          border:
+              Border(bottom: BorderSide(color: context.colors.borderSubtle)),
         ),
         tableBorder: TableBorder(
           top: BorderSide(color: context.colors.borderSubtle, width: 1),
           bottom: BorderSide(color: context.colors.borderSubtle, width: 1),
-          horizontalInside: BorderSide(color: context.colors.borderSubtle, width: 1),
+          horizontalInside:
+              BorderSide(color: context.colors.borderSubtle, width: 1),
           verticalInside: BorderSide.none,
           left: BorderSide.none,
           right: BorderSide.none,
         ),
-        tableCellsPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        tableCellsPadding:
+            const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
         tableCellsDecoration: const BoxDecoration(),
         tableHeadAlign: TextAlign.left,
         tableColumnWidth: const ConstrainedIntrinsicColumnWidth(maxWidth: 300),
@@ -554,12 +591,14 @@ class _CodeElementBuilder extends MarkdownElementBuilder {
 
   @override
   Widget? visitElementAfter(md.Element element, TextStyle? preferredStyle) {
-    bool isBlock = element.textContent.contains('\n') || element.attributes.containsKey('class');
-    
+    bool isBlock = element.textContent.contains('\n') ||
+        element.attributes.containsKey('class');
+
     if (isBlock) {
       final codeText = element.textContent.trim();
-      final language = element.attributes['class']?.replaceFirst('language-', '') ?? 'code';
-      
+      final language =
+          element.attributes['class']?.replaceFirst('language-', '') ?? 'code';
+
       return Container(
         margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 0),
         decoration: BoxDecoration(
@@ -578,51 +617,66 @@ class _CodeElementBuilder extends MarkdownElementBuilder {
                   topLeft: Radius.circular(8),
                   topRight: Radius.circular(8),
                 ),
-                border: Border(bottom: BorderSide(color: context.colors.borderSubtle)),
+                border: Border(
+                    bottom: BorderSide(color: context.colors.borderSubtle)),
               ),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   Text(
                     language.toUpperCase(),
-                    style: context.typography.labelSmall?.copyWith(color: context.colors.textMuted),
+                    style: context.typography.labelSmall
+                        ?.copyWith(color: context.colors.textMuted),
                   ),
                   PressFeedback(
-                    scaleFactor: 0.94,
-                    child: InkWell(
-                    onTap: () async {
-                      try {
-                        await Clipboard.setData(ClipboardData(text: codeText));
-                        if (context.mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              content: Text('Kode disalin', style: context.typography.bodySmall?.copyWith(color: context.colors.surface0)),
-                              backgroundColor: context.colors.textPrimary,
-                              duration: const Duration(seconds: 2),
-                              behavior: SnackBarBehavior.floating,
-                            ),
-                          );
-                        }
-                      } catch (_) {
-                         if (context.mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('Gagal menyalin kode'), backgroundColor: Colors.red),
-                          );
-                        }
-                      }
-                    },
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(Icons.copy, size: 14, color: context.colors.textSecondary),
-                          const SizedBox(width: 6),
-                          Text('Salin', style: context.typography.labelSmall?.copyWith(color: context.colors.textSecondary, fontWeight: FontWeight.w600)),
-                        ],
-                      ),
-                    ),
-                  )),
+                      scaleFactor: 0.94,
+                      child: InkWell(
+                        onTap: () async {
+                          try {
+                            await Clipboard.setData(
+                                ClipboardData(text: codeText));
+                            if (context.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text('Kode disalin',
+                                      style: context.typography.bodySmall
+                                          ?.copyWith(
+                                              color: context.colors.surface0)),
+                                  backgroundColor: context.colors.textPrimary,
+                                  duration: const Duration(seconds: 2),
+                                  behavior: SnackBarBehavior.floating,
+                                ),
+                              );
+                            }
+                          } catch (_) {
+                            if (context.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                    content: Text('Gagal menyalin kode'),
+                                    backgroundColor: Colors.red),
+                              );
+                            }
+                          }
+                        },
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 4, vertical: 2),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.copy,
+                                  size: 14,
+                                  color: context.colors.textSecondary),
+                              const SizedBox(width: 6),
+                              Text('Salin',
+                                  style: context.typography.labelSmall
+                                      ?.copyWith(
+                                          color: context.colors.textSecondary,
+                                          fontWeight: FontWeight.w600)),
+                            ],
+                          ),
+                        ),
+                      )),
                 ],
               ),
             ),
@@ -666,15 +720,12 @@ class _CodeElementBuilder extends MarkdownElementBuilder {
 class _ThinkingIndicator extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
-    final text = context.watch<SciChatProvider>().statusText ?? 'Memahami pertanyaan...';
+    final text =
+        context.watch<SciChatProvider>().statusText ?? 'Memahami pertanyaan...';
 
     return Row(
       children: [
         const GhostLoader(size: 28.0),
-
-
-
-
         const SizedBox(width: 12),
         Expanded(
           child: Text(
@@ -686,15 +737,14 @@ class _ThinkingIndicator extends StatelessWidget {
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
           ).animate(key: ValueKey(text)).fadeIn(duration: 300.ms).shimmer(
-            duration: 1200.ms, 
-            color: context.colors.textPrimary.withValues(alpha: 0.5),
-          ),
+                duration: 1200.ms,
+                color: context.colors.textPrimary.withValues(alpha: 0.5),
+              ),
         ),
       ],
     );
   }
 }
-
 
 class _ErrorMessage extends StatelessWidget {
   final ChatErrorType? errorType;
@@ -715,35 +765,41 @@ class _ErrorMessage extends StatelessWidget {
     if (hasPartialResponse) {
       return (
         title: 'Respons terputus',
-        description: 'Sebagian respons berhasil diterima. Kamu dapat melanjutkan jawaban ini (kelanjutan dihasilkan oleh model AI dan disesuaikan dengan konteks).',
+        description:
+            'Sebagian respons berhasil diterima. Kamu dapat melanjutkan jawaban ini (kelanjutan dihasilkan oleh model AI dan disesuaikan dengan konteks).',
       );
     }
     switch (errorType) {
       case ChatErrorType.connection:
         return (
           title: 'Koneksi internet terputus',
-          description: 'Pesanmu belum berhasil dikirim. Periksa koneksi internet, lalu coba lagi.',
+          description:
+              'Pesanmu belum berhasil dikirim. Periksa koneksi internet, lalu coba lagi.',
         );
       case ChatErrorType.timeout:
         return (
           title: 'Permintaan terlalu lama',
-          description: 'Pesanmu belum berhasil dikirim. Coba lagi beberapa saat lagi.',
+          description:
+              'Pesanmu belum berhasil dikirim. Coba lagi beberapa saat lagi.',
         );
       case ChatErrorType.server:
         return (
           title: 'Layanan AI sedang bermasalah',
-          description: 'Pesanmu belum berhasil dikirim. Coba lagi dalam beberapa saat.',
+          description:
+              'Pesanmu belum berhasil dikirim. Coba lagi dalam beberapa saat.',
         );
       case ChatErrorType.authentication:
         return (
           title: 'API key perlu diperiksa',
-          description: 'SciChat belum dapat terhubung ke layanan AI. Periksa API key di Pengaturan.',
+          description:
+              'SciChat belum dapat terhubung ke layanan AI. Periksa API key di Pengaturan.',
         );
       case ChatErrorType.unknown:
       case null:
         return (
           title: 'Respons belum berhasil dimuat',
-          description: 'Pesanmu belum berhasil dikirim. Coba lagi dalam beberapa saat.',
+          description:
+              'Pesanmu belum berhasil dikirim. Coba lagi dalam beberapa saat.',
         );
     }
   }
@@ -782,7 +838,9 @@ class _ErrorMessage extends StatelessWidget {
                     color: context.colors.textSecondary,
                   ),
                 ),
-                if (onRetry != null || onContinue != null || onDismiss != null) ...[
+                if (onRetry != null ||
+                    onContinue != null ||
+                    onDismiss != null) ...[
                   const SizedBox(height: 6),
                   Wrap(
                     spacing: 4,
@@ -865,7 +923,8 @@ class _TruncatedContinuationBanner extends StatelessWidget {
               icon: const Icon(Icons.arrow_forward, size: 16),
               label: const Text('Lanjutkan respons'),
               style: TextButton.styleFrom(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                 minimumSize: Size.zero,
                 tapTargetSize: MaterialTapTargetSize.shrinkWrap,
               ),
@@ -892,7 +951,8 @@ class _CancelledGenerationBanner extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(Icons.stop_circle_outlined, size: 16, color: context.colors.textMuted),
+          Icon(Icons.stop_circle_outlined,
+              size: 16, color: context.colors.textMuted),
           const SizedBox(width: 8),
           Expanded(
             child: Text(
@@ -908,9 +968,6 @@ class _CancelledGenerationBanner extends StatelessWidget {
     );
   }
 }
-
-
-
 
 class _TrendChart extends StatelessWidget {
   final List<ArxivPaper> papers;
@@ -930,7 +987,7 @@ class _TrendChart extends StatelessWidget {
         }
       }
     }
-    
+
     if (yearCounts.isEmpty) return const SizedBox.shrink();
 
     final sortedYears = yearCounts.keys.toList()..sort();
@@ -957,7 +1014,7 @@ class _TrendChart extends StatelessWidget {
           final yearCount = maxYear - minYear + 1;
           final minWidth = yearCount * 30.0;
           final chartWidth = math.max(constraints.maxWidth, minWidth);
-          
+
           return SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: SizedBox(
@@ -975,20 +1032,24 @@ class _TrendChart extends StatelessWidget {
                       drawVerticalLine: false,
                       horizontalInterval: 1,
                       getDrawingHorizontalLine: (value) => FlLine(
-                        color: context.colors.borderSubtle.withValues(alpha: 0.5),
+                        color:
+                            context.colors.borderSubtle.withValues(alpha: 0.5),
                         strokeWidth: 1,
                         dashArray: [2, 4],
                       ),
                     ),
                     titlesData: FlTitlesData(
-                      rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                      topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                      rightTitles: const AxisTitles(
+                          sideTitles: SideTitles(showTitles: false)),
+                      topTitles: const AxisTitles(
+                          sideTitles: SideTitles(showTitles: false)),
                       bottomTitles: AxisTitles(
                         sideTitles: SideTitles(
                           showTitles: true,
                           reservedSize: 14,
                           getTitlesWidget: (value, meta) {
-                            if (value != value.toInt()) return const SizedBox.shrink();
+                            if (value != value.toInt())
+                              return const SizedBox.shrink();
                             return Padding(
                               padding: const EdgeInsets.only(top: 4),
                               child: Text(
@@ -1002,7 +1063,8 @@ class _TrendChart extends StatelessWidget {
                           interval: 1,
                         ),
                       ),
-                      leftTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                      leftTitles: const AxisTitles(
+                          sideTitles: SideTitles(showTitles: false)),
                     ),
                     borderData: FlBorderData(show: false),
                     lineBarsData: [
@@ -1026,7 +1088,10 @@ class _TrendChart extends StatelessWidget {
           );
         },
       ),
-    ).animate().fadeIn(duration: 400.ms, delay: 100.ms).slideY(begin: 0.1, end: 0, duration: 400.ms, curve: Curves.easeOut);
+    )
+        .animate()
+        .fadeIn(duration: 400.ms, delay: 100.ms)
+        .slideY(begin: 0.1, end: 0, duration: 400.ms, curve: Curves.easeOut);
   }
 }
 
@@ -1041,44 +1106,51 @@ class _SaveInsightButton extends StatelessWidget {
     final isSaved = provider.isNoteSaved(message.id);
 
     return PressFeedback(
-      enabled: !isSaved,
-      scaleFactor: 0.95,
-      child: InkWell(
-      onTap: isSaved ? null : () async {
-        final success = await provider.saveInsight(message);
-        if (context.mounted && success) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: const Text('Insight berhasil disimpan ke Catatan.'),
-              backgroundColor: context.colors.accent,
-              behavior: SnackBarBehavior.floating,
-              duration: const Duration(seconds: 2),
+        enabled: !isSaved,
+        scaleFactor: 0.95,
+        child: InkWell(
+          onTap: isSaved
+              ? null
+              : () async {
+                  final success = await provider.saveInsight(message);
+                  if (context.mounted && success) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content:
+                            const Text('Insight berhasil disimpan ke Catatan.'),
+                        backgroundColor: context.colors.accent,
+                        behavior: SnackBarBehavior.floating,
+                        duration: const Duration(seconds: 2),
+                      ),
+                    );
+                  }
+                },
+          borderRadius: BorderRadius.circular(4),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  isSaved ? Icons.bookmark : Icons.bookmark_add_outlined,
+                  size: 14,
+                  color: isSaved
+                      ? context.colors.accent
+                      : context.colors.textMuted,
+                ),
+                const SizedBox(width: 4),
+                Text(
+                  isSaved ? 'Tersimpan' : 'Simpan Insight',
+                  style: context.typography.labelSmall?.copyWith(
+                    color: isSaved
+                        ? context.colors.accent
+                        : context.colors.textMuted,
+                  ),
+                ),
+              ],
             ),
-          );
-        }
-      },
-      borderRadius: BorderRadius.circular(4),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              isSaved ? Icons.bookmark : Icons.bookmark_add_outlined,
-              size: 14,
-              color: isSaved ? context.colors.accent : context.colors.textMuted,
-            ),
-            const SizedBox(width: 4),
-            Text(
-              isSaved ? 'Tersimpan' : 'Simpan Insight',
-              style: context.typography.labelSmall?.copyWith(
-                color: isSaved ? context.colors.accent : context.colors.textMuted,
-              ),
-            ),
-          ],
-        ),
-      ),
-    ));
+          ),
+        ));
   }
 }
 
@@ -1095,8 +1167,8 @@ class CustomLatexElementBuilder extends MarkdownElementBuilder {
     TextStyle? parentStyle,
   ) {
     final String text = element.textContent;
-    if (text.isEmpty) {
-      return const SizedBox();
+    if (text.trim().isEmpty || text.trim() == r'$$') {
+      return const SizedBox.shrink();
     }
 
     MathStyle mathStyle = MathStyle.text;
@@ -1109,7 +1181,17 @@ class CustomLatexElementBuilder extends MarkdownElementBuilder {
       processText = processText.substring(2, processText.length - 2);
     }
 
-    final effectiveStyle = parentStyle ?? preferredStyle ?? context.typography.bodyLarge ?? const TextStyle();
+    processText = sanitizeLatexMacros(processText);
+    processText = sanitizeLatexDecimalCommas(processText);
+
+    if (processText.trim().isEmpty || processText.trim() == r'$$') {
+      return const SizedBox.shrink();
+    }
+
+    final effectiveStyle = parentStyle ??
+        preferredStyle ??
+        context.typography.bodyLarge ??
+        const TextStyle();
 
     final mathWidget = Math.tex(
       processText,
@@ -1117,7 +1199,13 @@ class CustomLatexElementBuilder extends MarkdownElementBuilder {
       mathStyle: mathStyle,
       textScaleFactor: mathStyle == MathStyle.display ? 1.1 : 1.0,
       onErrorFallback: (err) {
-        final String restored = mathStyle == MathStyle.display ? '\$\$\n$processText\n\$\$' : '\$$processText\$';
+        final trimmed = processText.trim();
+        if (trimmed.isEmpty || trimmed == r'$$') {
+          return const SizedBox.shrink();
+        }
+        final String restored = mathStyle == MathStyle.display
+            ? '\$\$\n$processText\n\$\$'
+            : '\$$processText\$';
         return Text(
           restored,
           style: effectiveStyle.copyWith(
@@ -1139,7 +1227,7 @@ class CustomLatexElementBuilder extends MarkdownElementBuilder {
         ),
       );
     } else {
-      if (processText.length > 50) {
+      if (isWideLatexFormula(processText)) {
         return Text.rich(
           WidgetSpan(
             alignment: PlaceholderAlignment.middle,
@@ -1160,14 +1248,128 @@ class CustomLatexElementBuilder extends MarkdownElementBuilder {
       );
     }
   }
+
+  /// Menentukan apakah formula LaTeX berpotensi lebar pada layar ponsel.
+  /// Memeriksa panjang karakter atau adanya operator struktural (pecahan, akar, integral,
+  /// matriks, penjumlahan, tanda kurung kurawal berskala) agar dibungkus SingleChildScrollView.
+  @visibleForTesting
+  static bool isWideLatexFormula(String formula) {
+    if (formula.length > 28) return true;
+    final widePattern = RegExp(
+      r'(\\frac|\\cfrac|\\dfrac|\\sum|\\int|\\prod|\\sqrt|\\matrix|\\begin|\\cases|\\langle|\\left|\\right|\\circ|\\long|\\mapsto)',
+    );
+    if (widePattern.hasMatch(formula)) return true;
+    if (formula.contains(r'\in') && formula.length > 18) return true;
+    return false;
+  }
+
+  /// Memperbaiki macro Plain TeX yang tidak didukung KaTeX ke padanan resmi KaTeX.
+  /// Menangani \hbox{...} dengan balanced brace scanner tanpa merusak kurung kurawal bersarang.
+  @visibleForTesting
+  static String sanitizeLatexMacros(String text) {
+    if (!text.contains(r'\hbox')) return text;
+    final sb = StringBuffer();
+    int i = 0;
+    while (i < text.length) {
+      final idx = text.indexOf(r'\hbox', i);
+      if (idx == -1) {
+        sb.write(text.substring(i));
+        break;
+      }
+      final afterIdx = idx + 5;
+      if (afterIdx < text.length &&
+          RegExp(r'[a-zA-Z]').hasMatch(text[afterIdx])) {
+        sb.write(text.substring(i, afterIdx));
+        i = afterIdx;
+        continue;
+      }
+      sb.write(text.substring(i, idx));
+      int braceIdx = afterIdx;
+      while (braceIdx < text.length &&
+          (text[braceIdx] == ' ' || text[braceIdx] == '\t')) {
+        braceIdx++;
+      }
+      if (braceIdx < text.length && text[braceIdx] == '{') {
+        int depth = 1;
+        int j = braceIdx + 1;
+        while (j < text.length && depth > 0) {
+          if (text[j] == r'\' && j + 1 < text.length) {
+            j += 2;
+            continue;
+          }
+          if (text[j] == '{') {
+            depth++;
+          } else if (text[j] == '}') {
+            depth--;
+          }
+          if (depth == 0) break;
+          j++;
+        }
+        if (depth == 0) {
+          final inner = text.substring(braceIdx + 1, j);
+          final sanitizedInner = sanitizeLatexMacros(inner);
+          sb.write(r'\text{');
+          sb.write(sanitizedInner);
+          sb.write('}');
+          i = j + 1;
+          continue;
+        }
+      }
+      sb.write(text.substring(idx, afterIdx));
+      i = afterIdx;
+    }
+    return sb.toString();
+  }
+
+  /// Merapikan koma desimal pada notasi angka di dalam rumus LaTeX.
+  /// Di TeX math mode, tanda koma biasa dianggap sebagai operator tanda baca (PUNCT)
+  /// yang menambahkan jarak spasi tipis (\thinspace) setelahnya: "3, 43".
+  /// Notasi "{,}" memberitahu TeX bahwa koma tersebut adalah karakter biasa (ORD)
+  /// sehingga dirender rapat tanpa spasi canggung: "3{,}43".
+  /// Hanya diaplikasikan pada koma di antara digit murni tanpa adanya titik desimal.
+  @visibleForTesting
+  static String sanitizeLatexDecimalCommas(String text) {
+    return text.replaceAllMapped(
+      RegExp(r'(?<![\d.])(\d+),(\d+)(?![\d.])'),
+      (m) => '${m[1]}{,}${m[2]}',
+    );
+  }
 }
 
 class MathInlineSyntax extends md.InlineSyntax {
-  MathInlineSyntax() : super(r'(?<!\\)\$(?!\s)([^\$]+?)(?<!\s)(?<!\\)\$(?!\d)');
+  MathInlineSyntax()
+      : super(
+            r'(?:(?<!\\)\$(?!\$)([^\$]+?)(?<!\\)\$(?!\d)|\\\(([\s\S]+?)\\\))');
+
+  @override
+  bool tryMatch(md.InlineParser parser, [int? startMatchPos]) {
+    final pos = startMatchPos ?? parser.pos;
+    final match = pattern.matchAsPrefix(parser.source, pos);
+    if (match == null) return false;
+
+    final raw = match.group(1) ?? match.group(2) ?? '';
+    final equation = raw.trim();
+    if (equation.isEmpty) return false;
+
+    // Proteksi simbol mata uang atau prosa biasa yang terjepit delimiter $:
+    if (match.group(1) != null &&
+        raw.contains(' ') &&
+        !raw.contains(r'\') &&
+        !RegExp(r'[_^=<>+\-*/~]').hasMatch(raw)) {
+      if (RegExp(r'\b(and|or|to|for|per|each|is|are|the|in|at)\b',
+              caseSensitive: false)
+          .hasMatch(raw)) {
+        return false;
+      }
+    }
+
+    return super.tryMatch(parser, startMatchPos);
+  }
 
   @override
   bool onMatch(md.InlineParser parser, Match match) {
-    final equation = match.group(1) ?? '';
+    final raw = match.group(1) ?? match.group(2) ?? '';
+    final equation = raw.trim();
     final element = md.Element.text('latex', equation);
     element.attributes['MathStyle'] = 'text';
     parser.addNode(element);
@@ -1189,15 +1391,27 @@ class MathBlockSyntax extends md.BlockSyntax {
     if (match == null) return false;
     final rest = match.group(1)!;
     if (rest.contains(r'$$')) {
-      return RegExp(r'^\s*\$\$(.+?)\$\$\s*$').hasMatch(content);
+      final singleLine = RegExp(r'^\s*\$\$(.+?)\$\$\s*$').firstMatch(content);
+      return singleLine != null && singleLine.group(1)!.trim().isNotEmpty;
     }
-    return true;
+    // Cek apakah ada penutup $$ pada baris-baris berikutnya agar tidak memakan dokumen bila tidak berpasangan
+    int ahead = 1;
+    while (true) {
+      final line = parser.peek(ahead);
+      if (line == null) break;
+      if (RegExp(r'\$\$\s*$').hasMatch(line.content)) {
+        return true;
+      }
+      ahead++;
+    }
+    return false;
   }
 
   @override
   md.Node parse(md.BlockParser parser) {
     final currentContent = parser.current.content;
-    final singleLineMatch = RegExp(r'^\s*\$\$(.+?)\$\$\s*$').firstMatch(currentContent);
+    final singleLineMatch =
+        RegExp(r'^\s*\$\$(.+?)\$\$\s*$').firstMatch(currentContent);
 
     String equation;
     if (singleLineMatch != null) {
@@ -1234,7 +1448,6 @@ class MathBlockSyntax extends md.BlockSyntax {
   }
 }
 
-
 class ConstrainedIntrinsicColumnWidth extends IntrinsicColumnWidth {
   final double maxWidth;
   const ConstrainedIntrinsicColumnWidth({this.maxWidth = 200, super.flex});
@@ -1264,7 +1477,8 @@ class _FollowUpSuggestionsSection extends StatelessWidget {
         children: [
           Row(
             children: [
-              Icon(Icons.explore_outlined, size: 14, color: context.colors.accent),
+              Icon(Icons.explore_outlined,
+                  size: 14, color: context.colors.accent),
               const SizedBox(width: 8),
               Text(
                 'Eksplorasi topik tertentu lebih jauh:',
@@ -1334,7 +1548,8 @@ class _FollowUpChipState extends State<_FollowUpChip> {
       if (raw.startsWith('***') && raw.endsWith('***') && raw.length > 6) {
         spans.add(TextSpan(
           text: raw.substring(3, raw.length - 3),
-          style: const TextStyle(fontWeight: FontWeight.bold, fontStyle: FontStyle.italic),
+          style: const TextStyle(
+              fontWeight: FontWeight.bold, fontStyle: FontStyle.italic),
         ));
       } else if (raw.startsWith('**') && raw.endsWith('**') && raw.length > 4) {
         spans.add(TextSpan(
@@ -1376,7 +1591,9 @@ class _FollowUpChipState extends State<_FollowUpChip> {
   Widget _buildContent(BuildContext context) {
     final colors = context.colors;
     final spans = _parseSpans(widget.text, colors);
-    if (spans.length == 1 && spans.first is TextSpan && (spans.first as TextSpan).style == null) {
+    if (spans.length == 1 &&
+        spans.first is TextSpan &&
+        (spans.first as TextSpan).style == null) {
       return Text(
         widget.cleanText ?? widget.text,
         style: GoogleFonts.sourceSerif4(
@@ -1402,41 +1619,47 @@ class _FollowUpChipState extends State<_FollowUpChip> {
   Widget build(BuildContext context) {
     final colors = context.colors;
     return PressFeedback(
-      scaleFactor: 0.98,
-      child: GestureDetector(
-      onTapDown: (_) => setState(() => _pressed = true),
-      onTapCancel: () => setState(() => _pressed = false),
-      onTap: () {
-        setState(() => _pressed = false);
-        HapticFeedback.lightImpact();
-        widget.onTap();
-      },
-      child: AnimatedContainer(
-        duration: 120.ms,
-        width: double.infinity,
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        decoration: BoxDecoration(
-          color: _pressed ? colors.surface2 : colors.surface1,
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(
-            color: _pressed ? colors.accent.withValues(alpha: 0.4) : colors.borderSubtle,
-            width: 1,
-          ),
-        ),
-        child: Row(
-          children: [
-            Expanded(
-              child: _buildContent(context),
-            ),
-            const SizedBox(width: 12),
-            Icon(
-              Icons.subdirectory_arrow_right_rounded,
-              size: 18,
-              color: colors.textMuted,
-            ),
-          ],
-        ),
-      ),
-    )).animate(delay: widget.delay).fadeIn(duration: 240.ms).slideY(begin: 0.04, end: 0, duration: 240.ms);
+            scaleFactor: 0.98,
+            child: GestureDetector(
+              onTapDown: (_) => setState(() => _pressed = true),
+              onTapCancel: () => setState(() => _pressed = false),
+              onTap: () {
+                setState(() => _pressed = false);
+                HapticFeedback.lightImpact();
+                widget.onTap();
+              },
+              child: AnimatedContainer(
+                duration: 120.ms,
+                width: double.infinity,
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                decoration: BoxDecoration(
+                  color: _pressed ? colors.surface2 : colors.surface1,
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(
+                    color: _pressed
+                        ? colors.accent.withValues(alpha: 0.4)
+                        : colors.borderSubtle,
+                    width: 1,
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: _buildContent(context),
+                    ),
+                    const SizedBox(width: 12),
+                    Icon(
+                      Icons.subdirectory_arrow_right_rounded,
+                      size: 18,
+                      color: colors.textMuted,
+                    ),
+                  ],
+                ),
+              ),
+            ))
+        .animate(delay: widget.delay)
+        .fadeIn(duration: 240.ms)
+        .slideY(begin: 0.04, end: 0, duration: 240.ms);
   }
 }

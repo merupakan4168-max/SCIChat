@@ -20,7 +20,9 @@ class SourceBadge extends StatelessWidget {
     if (s.contains('semantic')) return Icons.school_outlined;
     if (s.contains('openalex') || s.contains('alex')) return Icons.hub_outlined;
     if (s.contains('archive')) return Icons.account_balance_wallet_outlined;
-    if (s.contains('crossref') || s.contains('cross ref')) return Icons.link_outlined;
+    if (s.contains('crossref') || s.contains('cross ref')) {
+      return Icons.link_outlined;
+    }
     return Icons.menu_book_outlined;
   }
 
@@ -46,6 +48,37 @@ class SourceBadge extends StatelessWidget {
       return '${formatted.substring(0, formatted.length - 2)}M sitasi';
     }
     return '${formatted}M sitasi';
+  }
+
+  /// Checks if a category label duplicates an existing source provider name.
+  static bool isCategoryDuplicatingSource(
+      String category, Iterable<String> sources) {
+    final catLower = category.trim().toLowerCase();
+    if (catLower.isEmpty) return true;
+    for (final src in sources) {
+      final srcLower = src.trim().toLowerCase();
+      if (catLower == srcLower) return true;
+      if ((catLower == 'archive' || catLower == 'internet archive') &&
+          (srcLower == 'archive' || srcLower == 'internet archive')) {
+        return true;
+      }
+      if ((catLower == 'openalex' || catLower == 'open alex') &&
+          (srcLower == 'openalex' || srcLower == 'open alex')) {
+        return true;
+      }
+      if ((catLower == 'semantic scholar' || catLower == 'semanticscholar') &&
+          (srcLower == 'semantic scholar' || srcLower == 'semanticscholar')) {
+        return true;
+      }
+      if ((catLower == 'crossref' || catLower == 'cross ref') &&
+          (srcLower == 'crossref' || srcLower == 'cross ref')) {
+        return true;
+      }
+      if (catLower == 'arxiv' && srcLower == 'arxiv') {
+        return true;
+      }
+    }
+    return false;
   }
 
   @override

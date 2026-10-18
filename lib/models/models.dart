@@ -16,6 +16,7 @@ class PaperEvidence {
     this.extractedText,
   });
 }
+
 class ArxivPaper {
   final String id;
   final String title;
@@ -67,28 +68,30 @@ class ArxivPaper {
     int? citationCount,
     int? referenceCount,
     List<String>? sources,
-  }) => ArxivPaper(
-    id: id ?? this.id,
-    title: title ?? this.title,
-    authors: authors ?? this.authors,
-    summary: summary ?? this.summary,
-    published: published ?? this.published,
-    updated: updated ?? this.updated,
-    categories: categories ?? this.categories,
-    pdfUrl: pdfUrl ?? this.pdfUrl,
-    absUrl: absUrl ?? this.absUrl,
-    doi: doi ?? this.doi,
-    journalRef: journalRef ?? this.journalRef,
-    citationCount: citationCount ?? this.citationCount,
-    referenceCount: referenceCount ?? this.referenceCount,
-    sources: sources ?? this.sources,
-  );
+  }) =>
+      ArxivPaper(
+        id: id ?? this.id,
+        title: title ?? this.title,
+        authors: authors ?? this.authors,
+        summary: summary ?? this.summary,
+        published: published ?? this.published,
+        updated: updated ?? this.updated,
+        categories: categories ?? this.categories,
+        pdfUrl: pdfUrl ?? this.pdfUrl,
+        absUrl: absUrl ?? this.absUrl,
+        doi: doi ?? this.doi,
+        journalRef: journalRef ?? this.journalRef,
+        citationCount: citationCount ?? this.citationCount,
+        referenceCount: referenceCount ?? this.referenceCount,
+        sources: sources ?? this.sources,
+      );
 
   static String? normalizeDoi(String? raw) {
     if (raw == null) return null;
     var d = raw.trim();
     if (d.isEmpty) return null;
-    d = d.replaceAll(RegExp(r'^https?:\/\/(dx\.)?doi\.org\/', caseSensitive: false), '');
+    d = d.replaceAll(
+        RegExp(r'^https?:\/\/(dx\.)?doi\.org\/', caseSensitive: false), '');
     d = d.replaceAll(RegExp(r'^doi:\s*', caseSensitive: false), '');
     d = d.trim();
     return d.isNotEmpty ? d : null;
@@ -113,7 +116,6 @@ class ArxivPaper {
 
   bool get hasUsableAbstract => isAbstractUsable(summary);
 
-
   bool get isInternetArchive =>
       absUrl.contains('archive.org') ||
       sources.contains('Internet Archive') ||
@@ -136,11 +138,19 @@ class ArxivPaper {
       sources.contains('arXiv') ||
       (doi != null && doi!.toLowerCase().contains('arxiv'));
 
-  String get primaryCategory => categories.isNotEmpty ? categories.first : 'Unknown';
+  bool get isOpenAlex =>
+      sources.any((s) => s.toLowerCase().contains('openalex')) ||
+      categories.any((c) => c.toLowerCase().contains('openalex')) ||
+      id.contains('openalex.org');
+
+  String get primaryCategory =>
+      categories.isNotEmpty ? categories.first : 'Unknown';
 
   String get shortId {
     var s = id.trim();
-    s = s.replaceAll(RegExp(r'^https?:\/\/arxiv\.org\/(abs|pdf)\/', caseSensitive: false), '');
+    s = s.replaceAll(
+        RegExp(r'^https?:\/\/arxiv\.org\/(abs|pdf)\/', caseSensitive: false),
+        '');
     s = s.replaceAll(RegExp(r'^arxiv:\s*', caseSensitive: false), '');
     s = s.replaceAll(RegExp(r'\.pdf$', caseSensitive: false), '');
     return s;
@@ -150,8 +160,19 @@ class ArxivPaper {
     try {
       final dt = DateTime.parse(published);
       const months = [
-        '', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-        'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+        '',
+        'Jan',
+        'Feb',
+        'Mar',
+        'Apr',
+        'May',
+        'Jun',
+        'Jul',
+        'Aug',
+        'Sep',
+        'Oct',
+        'Nov',
+        'Dec',
       ];
       return '${months[dt.month]} ${dt.day}, ${dt.year}';
     } catch (_) {
@@ -171,16 +192,19 @@ class ArxivPaper {
 
   String get bibtex {
     final year = RegExp(r'\d{4}').firstMatch(published)?.group(0) ?? 'unknown';
-    final cleanAuthors = authors.map(_cleanAuthor).where((a) => a.isNotEmpty).toList();
-    final authorStr = cleanAuthors.isNotEmpty ? cleanAuthors.join(' and ') : 'Unknown';
-    
+    final cleanAuthors =
+        authors.map(_cleanAuthor).where((a) => a.isNotEmpty).toList();
+    final authorStr =
+        cleanAuthors.isNotEmpty ? cleanAuthors.join(' and ') : 'Unknown';
+
     String citeKey = 'paper$year';
     final validFirstAuthor = cleanAuthors.firstWhere(
       (a) => a.toLowerCase() != 'unknown',
       orElse: () => '',
     );
     if (validFirstAuthor.isNotEmpty) {
-      final lastName = validFirstAuthor.split(' ').last.replaceAll(RegExp(r'[^a-zA-Z]'), '');
+      final lastName =
+          validFirstAuthor.split(' ').last.replaceAll(RegExp(r'[^a-zA-Z]'), '');
       if (lastName.isNotEmpty) {
         citeKey = '$lastName$year';
       }
@@ -207,9 +231,10 @@ class ArxivPaper {
       }
     } else if (isArxiv) {
       final eprint = shortId.isNotEmpty ? shortId : id;
-      final categoryLine = primaryCategory.isNotEmpty && primaryCategory != 'Unknown'
-          ? ',\n  primaryClass={$primaryCategory}'
-          : '';
+      final categoryLine =
+          primaryCategory.isNotEmpty && primaryCategory != 'Unknown'
+              ? ',\n  primaryClass={$primaryCategory}'
+              : '';
       final doiLine = (doi != null && doi!.isNotEmpty) ? ',\n  doi={$doi}' : '';
       return '''@article{$citeKey,
   title={$cleanTitle},
@@ -245,14 +270,17 @@ class ArxivPaper {
 
   String get apa {
     final year = RegExp(r'\d{4}').firstMatch(published)?.group(0) ?? 'n.d.';
-    final cleanAuthors = authors.map(_cleanAuthor).where((a) => a.isNotEmpty).toList();
-    
-    String authorStr = cleanAuthors.isNotEmpty ? cleanAuthors.join(', ') : 'Unknown';
+    final cleanAuthors =
+        authors.map(_cleanAuthor).where((a) => a.isNotEmpty).toList();
+
+    String authorStr =
+        cleanAuthors.isNotEmpty ? cleanAuthors.join(', ') : 'Unknown';
     if (cleanAuthors.length > 1) {
       final lastAuthor = cleanAuthors.last;
-      authorStr = '${cleanAuthors.sublist(0, cleanAuthors.length - 1).join(', ')}, & $lastAuthor';
+      authorStr =
+          '${cleanAuthors.sublist(0, cleanAuthors.length - 1).join(', ')}, & $lastAuthor';
     }
-    
+
     final cleanTitle = title.replaceAll('\n', ' ').trim();
 
     String sourceName;
@@ -267,8 +295,12 @@ class ArxivPaper {
     }
 
     final urlOrDoi = (doi != null && doi!.isNotEmpty && !absUrl.contains(doi!))
-        ? (absUrl.isNotEmpty ? '$absUrl. https://doi.org/$doi' : 'https://doi.org/$doi')
-        : (absUrl.isNotEmpty ? absUrl : (doi != null && doi!.isNotEmpty ? 'https://doi.org/$doi' : ''));
+        ? (absUrl.isNotEmpty
+            ? '$absUrl. https://doi.org/$doi'
+            : 'https://doi.org/$doi')
+        : (absUrl.isNotEmpty
+            ? absUrl
+            : (doi != null && doi!.isNotEmpty ? 'https://doi.org/$doi' : ''));
 
     final buffer = StringBuffer();
     buffer.write('$authorStr ($year). $cleanTitle.');
@@ -282,38 +314,38 @@ class ArxivPaper {
   }
 
   Map<String, dynamic> toJson() => {
-    'id': id,
-    'title': title,
-    'authors': authors,
-    'summary': summary,
-    'published': published,
-    'updated': updated,
-    'categories': categories,
-    'pdfUrl': pdfUrl,
-    'absUrl': absUrl,
-    'doi': doi,
-    'journalRef': journalRef,
-    'citationCount': citationCount,
-    'referenceCount': referenceCount,
-    'sources': sources,
-  };
+        'id': id,
+        'title': title,
+        'authors': authors,
+        'summary': summary,
+        'published': published,
+        'updated': updated,
+        'categories': categories,
+        'pdfUrl': pdfUrl,
+        'absUrl': absUrl,
+        'doi': doi,
+        'journalRef': journalRef,
+        'citationCount': citationCount,
+        'referenceCount': referenceCount,
+        'sources': sources,
+      };
 
   factory ArxivPaper.fromJson(Map<String, dynamic> j) => ArxivPaper(
-    id: j['id'] ?? '',
-    title: j['title'] ?? '',
-    authors: List<String>.from(j['authors'] ?? []),
-    summary: j['summary'] ?? '',
-    published: j['published'] ?? '',
-    updated: j['updated'] ?? '',
-    categories: List<String>.from(j['categories'] ?? []),
-    pdfUrl: j['pdfUrl'] ?? '',
-    absUrl: j['absUrl'] ?? '',
-    doi: normalizeDoi(j['doi'] as String?),
-    journalRef: j['journalRef'],
-    citationCount: j['citationCount'] as int?,
-    referenceCount: j['referenceCount'] as int?,
-    sources: List<String>.from(j['sources'] ?? const []),
-  );
+        id: j['id'] ?? '',
+        title: j['title'] ?? '',
+        authors: List<String>.from(j['authors'] ?? []),
+        summary: j['summary'] ?? '',
+        published: j['published'] ?? '',
+        updated: j['updated'] ?? '',
+        categories: List<String>.from(j['categories'] ?? []),
+        pdfUrl: j['pdfUrl'] ?? '',
+        absUrl: j['absUrl'] ?? '',
+        doi: normalizeDoi(j['doi'] as String?),
+        journalRef: j['journalRef'],
+        citationCount: j['citationCount'] as int?,
+        referenceCount: j['referenceCount'] as int?,
+        sources: List<String>.from(j['sources'] ?? const []),
+      );
 }
 
 enum MessageRole { user, assistant, system }
@@ -357,55 +389,65 @@ class ChatMessage {
     ChatErrorType? errorType,
     bool? isTruncated,
     String? finishReason,
-  }) => ChatMessage(
-    id: id,
-    role: role,
-    content: content ?? this.content,
-    timestamp: timestamp,
-    status: status ?? this.status,
-    papers: papers ?? this.papers,
-    attachmentName: attachmentName,
-    followUpSuggestions: followUpSuggestions ?? this.followUpSuggestions,
-    errorType: errorType ?? this.errorType,
-    isTruncated: isTruncated ?? this.isTruncated,
-    finishReason: finishReason ?? this.finishReason,
-  );
+  }) =>
+      ChatMessage(
+        id: id,
+        role: role,
+        content: content ?? this.content,
+        timestamp: timestamp,
+        status: status ?? this.status,
+        papers: papers ?? this.papers,
+        attachmentName: attachmentName,
+        followUpSuggestions: followUpSuggestions ?? this.followUpSuggestions,
+        errorType: errorType ?? this.errorType,
+        isTruncated: isTruncated ?? this.isTruncated,
+        finishReason: finishReason ?? this.finishReason,
+      );
 
   bool get isUser => role == MessageRole.user;
   bool get isAssistant => role == MessageRole.assistant;
 
   Map<String, dynamic> toJson() => {
-    'id': id,
-    'role': role.toString(),
-    'content': content,
-    'timestamp': timestamp.toIso8601String(),
-    'status': status.toString(),
-    'papers': papers.map((p) => p.toJson()).toList(),
-    'attachmentName': attachmentName,
-    'followUpSuggestions': followUpSuggestions,
-    'errorType': errorType?.toString(),
-    'isTruncated': isTruncated,
-    'finishReason': finishReason,
-  };
+        'id': id,
+        'role': role.toString(),
+        'content': content,
+        'timestamp': timestamp.toIso8601String(),
+        'status': status.toString(),
+        'papers': papers.map((p) => p.toJson()).toList(),
+        'attachmentName': attachmentName,
+        'followUpSuggestions': followUpSuggestions,
+        'errorType': errorType?.toString(),
+        'isTruncated': isTruncated,
+        'finishReason': finishReason,
+      };
 
   factory ChatMessage.fromJson(Map<String, dynamic> j) => ChatMessage(
-    id: j['id'] ?? '',
-    role: MessageRole.values.firstWhere((e) => e.toString() == j['role'], orElse: () => MessageRole.user),
-    content: j['content'] ?? '',
-    timestamp: DateTime.tryParse(j['timestamp'] ?? '') ?? DateTime.now(),
-    status: MessageStatus.values.firstWhere((e) => e.toString() == j['status'], orElse: () => MessageStatus.done),
-    papers: (j['papers'] as List?)?.map((p) => ArxivPaper.fromJson(p)).toList() ?? [],
-    attachmentName: j['attachmentName'] as String?,
-    followUpSuggestions: (j['followUpSuggestions'] as List?)?.map((s) => s.toString()).toList() ?? const [],
-    errorType: j['errorType'] == null
-        ? null
-        : ChatErrorType.values.firstWhere(
-            (e) => e.toString() == j['errorType'],
-            orElse: () => ChatErrorType.unknown,
-          ),
-    isTruncated: j['isTruncated'] == true,
-    finishReason: j['finishReason'] as String?,
-  );
+        id: j['id'] ?? '',
+        role: MessageRole.values.firstWhere((e) => e.toString() == j['role'],
+            orElse: () => MessageRole.user),
+        content: j['content'] ?? '',
+        timestamp: DateTime.tryParse(j['timestamp'] ?? '') ?? DateTime.now(),
+        status: MessageStatus.values.firstWhere(
+            (e) => e.toString() == j['status'],
+            orElse: () => MessageStatus.done),
+        papers: (j['papers'] as List?)
+                ?.map((p) => ArxivPaper.fromJson(p))
+                .toList() ??
+            [],
+        attachmentName: j['attachmentName'] as String?,
+        followUpSuggestions: (j['followUpSuggestions'] as List?)
+                ?.map((s) => s.toString())
+                .toList() ??
+            const [],
+        errorType: j['errorType'] == null
+            ? null
+            : ChatErrorType.values.firstWhere(
+                (e) => e.toString() == j['errorType'],
+                orElse: () => ChatErrorType.unknown,
+              ),
+        isTruncated: j['isTruncated'] == true,
+        finishReason: j['finishReason'] as String?,
+      );
 }
 
 enum AiSkill {
@@ -418,28 +460,40 @@ enum AiSkill {
 extension AiSkillData on AiSkill {
   String get command {
     switch (this) {
-      case AiSkill.peerReview: return '/review';
-      case AiSkill.gapFinder: return '/gap';
-      case AiSkill.synthesizer: return '/table';
-      default: return '';
+      case AiSkill.peerReview:
+        return '/review';
+      case AiSkill.gapFinder:
+        return '/gap';
+      case AiSkill.synthesizer:
+        return '/table';
+      default:
+        return '';
     }
   }
 
   String get displayName {
     switch (this) {
-      case AiSkill.peerReview: return 'Reviewer Kritis';
-      case AiSkill.gapFinder: return 'Pencari Celah Riset';
-      case AiSkill.synthesizer: return 'Sintesis Tabel';
-      default: return 'Normal';
+      case AiSkill.peerReview:
+        return 'Reviewer Kritis';
+      case AiSkill.gapFinder:
+        return 'Pencari Celah Riset';
+      case AiSkill.synthesizer:
+        return 'Sintesis Tabel';
+      default:
+        return 'Normal';
     }
   }
 
   IconData get icon {
     switch (this) {
-      case AiSkill.peerReview: return Icons.rate_review_outlined;
-      case AiSkill.gapFinder: return Icons.troubleshoot_outlined;
-      case AiSkill.synthesizer: return Icons.compare_arrows_outlined;
-      default: return Icons.smart_toy_outlined;
+      case AiSkill.peerReview:
+        return Icons.rate_review_outlined;
+      case AiSkill.gapFinder:
+        return Icons.troubleshoot_outlined;
+      case AiSkill.synthesizer:
+        return Icons.compare_arrows_outlined;
+      default:
+        return Icons.smart_toy_outlined;
     }
   }
 
@@ -474,26 +528,30 @@ class ChatSession {
     String? title,
     DateTime? updatedAt,
     List<ChatMessage>? messages,
-  }) => ChatSession(
-    id: id,
-    title: title ?? this.title,
-    updatedAt: updatedAt ?? this.updatedAt,
-    messages: messages ?? this.messages,
-  );
+  }) =>
+      ChatSession(
+        id: id,
+        title: title ?? this.title,
+        updatedAt: updatedAt ?? this.updatedAt,
+        messages: messages ?? this.messages,
+      );
 
   Map<String, dynamic> toJson() => {
-    'id': id,
-    'title': title,
-    'updatedAt': updatedAt.toIso8601String(),
-    'messages': messages.map((m) => m.toJson()).toList(),
-  };
+        'id': id,
+        'title': title,
+        'updatedAt': updatedAt.toIso8601String(),
+        'messages': messages.map((m) => m.toJson()).toList(),
+      };
 
   factory ChatSession.fromJson(Map<String, dynamic> j) => ChatSession(
-    id: j['id'] ?? '',
-    title: j['title'] ?? 'New Chat',
-    updatedAt: DateTime.tryParse(j['updatedAt'] ?? '') ?? DateTime.now(),
-    messages: (j['messages'] as List?)?.map((m) => ChatMessage.fromJson(m)).toList() ?? [],
-  );
+        id: j['id'] ?? '',
+        title: j['title'] ?? 'New Chat',
+        updatedAt: DateTime.tryParse(j['updatedAt'] ?? '') ?? DateTime.now(),
+        messages: (j['messages'] as List?)
+                ?.map((m) => ChatMessage.fromJson(m))
+                .toList() ??
+            [],
+      );
 }
 
 class ResearchNote {
@@ -512,20 +570,23 @@ class ResearchNote {
   });
 
   Map<String, dynamic> toJson() => {
-    'id': id,
-    'sourceMessageId': sourceMessageId,
-    'content': content,
-    'sources': sources.map((p) => p.toJson()).toList(),
-    'savedAt': savedAt.toIso8601String(),
-  };
+        'id': id,
+        'sourceMessageId': sourceMessageId,
+        'content': content,
+        'sources': sources.map((p) => p.toJson()).toList(),
+        'savedAt': savedAt.toIso8601String(),
+      };
 
   factory ResearchNote.fromJson(Map<String, dynamic> j) => ResearchNote(
-    id: j['id'] ?? '',
-    sourceMessageId: j['sourceMessageId'] ?? '',
-    content: j['content'] ?? '',
-    sources: (j['sources'] as List?)?.map((p) => ArxivPaper.fromJson(p)).toList() ?? [],
-    savedAt: DateTime.tryParse(j['savedAt'] ?? '') ?? DateTime.now(),
-  );
+        id: j['id'] ?? '',
+        sourceMessageId: j['sourceMessageId'] ?? '',
+        content: j['content'] ?? '',
+        sources: (j['sources'] as List?)
+                ?.map((p) => ArxivPaper.fromJson(p))
+                .toList() ??
+            [],
+        savedAt: DateTime.tryParse(j['savedAt'] ?? '') ?? DateTime.now(),
+      );
 }
 
 class SearchFilter {
@@ -543,17 +604,64 @@ class SearchFilter {
     String? category,
     int? maxResults,
     String? sortBy,
-  }) => SearchFilter(
-    category: category ?? this.category,
-    maxResults: maxResults ?? this.maxResults,
-    sortBy: sortBy ?? this.sortBy,
-  );
+  }) =>
+      SearchFilter(
+        category: category ?? this.category,
+        maxResults: maxResults ?? this.maxResults,
+        sortBy: sortBy ?? this.sortBy,
+      );
 }
 
 const kArxivCategories = [
-  'All', 'cs.AI', 'cs.LG', 'cs.CV', 'cs.CL',
-  'physics', 'math', 'astro-ph', 'quant-ph',
-  'q-bio', 'econ', 'stat',
+  'All',
+  'cs.AI',
+  'cs.LG',
+  'cs.CV',
+  'cs.CL',
+  'physics',
+  'math',
+  'astro-ph',
+  'quant-ph',
+  'q-bio',
+  'econ',
+  'stat',
 ];
 
+/// Model yang merepresentasikan hasil translasi judul dan ringkasan paper ilmiah.
+class PaperTranslation {
+  final String title;
+  final String summary;
 
+  const PaperTranslation({
+    required this.title,
+    required this.summary,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'title': title,
+        'summary': summary,
+      };
+
+  factory PaperTranslation.fromJson(Map<String, dynamic> json) {
+    final title = json['title']?.toString().trim() ?? '';
+    final summary = json['summary']?.toString().trim() ?? '';
+    if (title.isEmpty && summary.isEmpty) {
+      throw const FormatException('Judul dan ringkasan terjemahan kosong');
+    }
+    return PaperTranslation(title: title, summary: summary);
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is PaperTranslation &&
+          runtimeType == other.runtimeType &&
+          title == other.title &&
+          summary == other.summary;
+
+  @override
+  int get hashCode => Object.hash(title, summary);
+
+  @override
+  String toString() => 'PaperTranslation(title: $title, summary: $summary)';
+}

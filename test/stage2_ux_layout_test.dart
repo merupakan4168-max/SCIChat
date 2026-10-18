@@ -30,16 +30,19 @@ class _MockStorageService extends StorageService {
     _sessions.clear();
     _sessions.addAll(sessions);
   }
+
   @override
   Future<List<ResearchNote>> getNotes() async => _notes;
   @override
   Future<void> addNote(ResearchNote note) async {
     _notes.add(note);
   }
+
   @override
   Future<void> removeNote(String id) async {
     _notes.removeWhere((n) => n.id == id);
   }
+
   @override
   Future<SearchFilter> getSearchFilter() async => const SearchFilter();
   @override
@@ -65,7 +68,6 @@ class _MockSearchService extends SearchService {
   @override
   Future<List<ArxivPaper>> fetchTrending() async => [];
 }
-
 
 class _MockPdfService extends PdfService {
   @override
@@ -120,7 +122,8 @@ class _MockGeminiService extends GeminiService {
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  Widget createTestWidget({required Widget child, required SciChatProvider provider}) {
+  Widget createTestWidget(
+      {required Widget child, required SciChatProvider provider}) {
     return ChangeNotifierProvider<SciChatProvider>.value(
       value: provider,
       child: MaterialApp(
@@ -132,7 +135,9 @@ void main() {
   }
 
   group('ISSUE-01: Research Notes Preview Rendering in FavoritesScreen', () {
-    testWidgets('Kartu pratinjau membersihkan penanda markdown mentah tanpa merusak konten asli', (tester) async {
+    testWidgets(
+        'Kartu pratinjau membersihkan penanda markdown mentah tanpa merusak konten asli',
+        (tester) async {
       final storage = _MockStorageService();
       final noteWithMarkdown = ResearchNote(
         id: 'note-1',
@@ -154,7 +159,8 @@ Rumus matematis: \$E = mc^2\$ dan kompleksitas O(n * log(n))''',
       );
       await provider.init();
 
-      await tester.pumpWidget(createTestWidget(child: const FavoritesScreen(), provider: provider));
+      await tester.pumpWidget(
+          createTestWidget(child: const FavoritesScreen(), provider: provider));
       await tester.pumpAndSettle();
 
       // Berpindah ke tab "Catatan" (tab kedua)
@@ -181,7 +187,9 @@ Rumus matematis: \$E = mc^2\$ dan kompleksitas O(n * log(n))''',
   });
 
   group('ISSUE-02: Floating Button Layout & Positioning in ChatScreen', () {
-    testWidgets('Tombol "Kembali ke respons terbaru" tidak muncul saat list di dasar, dan muncul saat user menggulir ke atas', (tester) async {
+    testWidgets(
+        'Tombol "Kembali ke respons terbaru" tidak muncul saat list di dasar, dan muncul saat user menggulir ke atas',
+        (tester) async {
       final provider = SciChatProvider(
         geminiService: _MockGeminiService(),
         searchService: _MockSearchService(),
@@ -196,7 +204,8 @@ Rumus matematis: \$E = mc^2\$ dan kompleksitas O(n * log(n))''',
         await provider.sendMessage('Pertanyaan $i');
       }
 
-      await tester.pumpWidget(createTestWidget(child: const ChatScreen(), provider: provider));
+      await tester.pumpWidget(
+          createTestWidget(child: const ChatScreen(), provider: provider));
       await tester.pumpAndSettle();
 
       // Saat di dasar, tombol floating tidak ditampilkan
@@ -206,9 +215,10 @@ Rumus matematis: \$E = mc^2\$ dan kompleksitas O(n * log(n))''',
       await tester.drag(find.byType(ListView), const Offset(0, 500));
       await tester.pumpAndSettle();
 
-      // Tombol floating sekarang harus muncul di atas composer
+      // Tombol floating sekarang harus muncul di atas composer secara ringkas (tanpa teks visual)
       expect(find.byKey(const Key('scrollToBottomButton')), findsOneWidget);
-      expect(find.text('Kembali ke respons terbaru'), findsOneWidget);
+      expect(find.text('Kembali ke respons terbaru'), findsNothing);
+      expect(find.byTooltip('Kembali ke respons terbaru'), findsOneWidget);
 
       // Ketuk tombol floating
       await tester.tap(find.byKey(const Key('scrollToBottomButton')));
@@ -219,8 +229,11 @@ Rumus matematis: \$E = mc^2\$ dan kompleksitas O(n * log(n))''',
     });
   });
 
-  group('ISSUE-03 & ISSUE-05: ExploreScreen Clear Search & Lifecycle Guards', () {
-    testWidgets('Tombol clear membersihkan teks input dan memulihkan kategori default jika kueri aktif', (tester) async {
+  group('ISSUE-03 & ISSUE-05: ExploreScreen Clear Search & Lifecycle Guards',
+      () {
+    testWidgets(
+        'Tombol clear membersihkan teks input dan memulihkan kategori default jika kueri aktif',
+        (tester) async {
       final searchService = _MockSearchService();
       searchService.resultsToReturn = [
         ArxivPaper(
@@ -244,14 +257,19 @@ Rumus matematis: \$E = mc^2\$ dan kompleksitas O(n * log(n))''',
       );
       await provider.init();
 
-      await tester.pumpWidget(createTestWidget(child: ExploreScreen(searchService: searchService), provider: provider));
+      await tester.pumpWidget(createTestWidget(
+          child: ExploreScreen(searchService: searchService),
+          provider: provider));
       await tester.pumpAndSettle();
 
       // Input teks pencarian dan submit
       final textField = find.byType(TextField);
       expect(textField, findsOneWidget);
       await tester.enterText(textField, 'quantum machine learning');
-      tester.widget<TextField>(textField).onSubmitted?.call('quantum machine learning');
+      tester
+          .widget<TextField>(textField)
+          .onSubmitted
+          ?.call('quantum machine learning');
       await tester.pumpAndSettle();
 
       expect(searchService.lastQuery, equals('quantum machine learning'));

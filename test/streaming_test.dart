@@ -69,7 +69,9 @@ void main() {
         if (request.url.path.endsWith('/models')) {
           return http.StreamedResponse(
             Stream.value(utf8.encode(jsonEncode({
-              'data': [{'id': 'agnes-3.0-flash'}]
+              'data': [
+                {'id': 'agnes-3.0-flash'}
+              ]
             }))),
             200,
           );
@@ -105,7 +107,11 @@ void main() {
       final mockClient = MockClient.streaming((request, bodyStream) async {
         if (request.url.path.endsWith('/models')) {
           return http.StreamedResponse(
-            Stream.value(utf8.encode(jsonEncode({'data': [{'id': 'agnes-3.0-flash'}]}))),
+            Stream.value(utf8.encode(jsonEncode({
+              'data': [
+                {'id': 'agnes-3.0-flash'}
+              ]
+            }))),
             200,
           );
         }
@@ -138,11 +144,17 @@ void main() {
       expect(chunks, equals(['Part 1 ', 'Part 2']));
     });
 
-    test('3. Ignores comments, empty lines, metadata, null deltas, and unknown events', () async {
+    test(
+        '3. Ignores comments, empty lines, metadata, null deltas, and unknown events',
+        () async {
       final mockClient = MockClient.streaming((request, bodyStream) async {
         if (request.url.path.endsWith('/models')) {
           return http.StreamedResponse(
-            Stream.value(utf8.encode(jsonEncode({'data': [{'id': 'agnes-3.0-flash'}]}))),
+            Stream.value(utf8.encode(jsonEncode({
+              'data': [
+                {'id': 'agnes-3.0-flash'}
+              ]
+            }))),
             200,
           );
         }
@@ -181,7 +193,11 @@ void main() {
       final mockClient = MockClient.streaming((request, bodyStream) async {
         if (request.url.path.endsWith('/models')) {
           return http.StreamedResponse(
-            Stream.value(utf8.encode(jsonEncode({'data': [{'id': 'agnes-3.0-flash'}]}))),
+            Stream.value(utf8.encode(jsonEncode({
+              'data': [
+                {'id': 'agnes-3.0-flash'}
+              ]
+            }))),
             200,
           );
         }
@@ -210,7 +226,11 @@ void main() {
       final mockClient = MockClient.streaming((request, bodyStream) async {
         if (request.url.path.endsWith('/models')) {
           return http.StreamedResponse(
-            Stream.value(utf8.encode(jsonEncode({'data': [{'id': 'agnes-3.0-flash'}]}))),
+            Stream.value(utf8.encode(jsonEncode({
+              'data': [
+                {'id': 'agnes-3.0-flash'}
+              ]
+            }))),
             200,
           );
         }
@@ -234,11 +254,17 @@ void main() {
       expect(chunks, isEmpty);
     });
 
-    test('6. Accepts data: without space after colon (e.g., data:{"choices":...})', () async {
+    test(
+        '6. Accepts data: without space after colon (e.g., data:{"choices":...})',
+        () async {
       final mockClient = MockClient.streaming((request, bodyStream) async {
         if (request.url.path.endsWith('/models')) {
           return http.StreamedResponse(
-            Stream.value(utf8.encode(jsonEncode({'data': [{'id': 'agnes-3.0-flash'}]}))),
+            Stream.value(utf8.encode(jsonEncode({
+              'data': [
+                {'id': 'agnes-3.0-flash'}
+              ]
+            }))),
             200,
           );
         }
@@ -268,11 +294,16 @@ void main() {
       expect(chunks, equals(['NoSpace']));
     });
 
-    test('7. Explicit error payload in SSE throws descriptive Exception', () async {
+    test('7. Explicit error payload in SSE throws descriptive Exception',
+        () async {
       final mockClient = MockClient.streaming((request, bodyStream) async {
         if (request.url.path.endsWith('/models')) {
           return http.StreamedResponse(
-            Stream.value(utf8.encode(jsonEncode({'data': [{'id': 'agnes-3.0-flash'}]}))),
+            Stream.value(utf8.encode(jsonEncode({
+              'data': [
+                {'id': 'agnes-3.0-flash'}
+              ]
+            }))),
             200,
           );
         }
@@ -293,13 +324,15 @@ void main() {
 
       expect(
         () => service.chatStream(history: [], userMessage: 'Test').toList(),
-        throwsA(predicate((e) => e.toString().contains('SSE Error: Model overloaded'))),
+        throwsA(predicate(
+            (e) => e.toString().contains('SSE Error: Model overloaded'))),
       );
     });
   });
 
   group('SciChatProvider Streaming & Fallback Tests', () {
-    test('1. Normal streaming flow: status streaming -> done, and throttling', () async {
+    test('1. Normal streaming flow: status streaming -> done, and throttling',
+        () async {
       final controller = StreamController<String>();
       final mockGemini = _FakeStreamingGeminiService(
         streamGenerator: () => controller.stream,
@@ -367,9 +400,11 @@ void main() {
       await sendFuture;
     });
 
-    test('3. Fallback to monolithic chat() if stream fails before first chunk', () async {
+    test('3. Fallback to monolithic chat() if stream fails before first chunk',
+        () async {
       final mockGemini = _FakeStreamingGeminiService(
-        streamGenerator: () => Stream.error(Exception('Stream connection failed')),
+        streamGenerator: () =>
+            Stream.error(Exception('Stream connection failed')),
         fallbackResponse: 'Jawaban sukses dari fallback monolitik',
       );
 
@@ -383,11 +418,14 @@ void main() {
 
       expect(provider.isLoading, isFalse);
       expect(provider.messages.last.status, equals(MessageStatus.done));
-      expect(provider.messages.last.content, equals('Jawaban sukses dari fallback monolitik'));
+      expect(provider.messages.last.content,
+          equals('Jawaban sukses dari fallback monolitik'));
       expect(mockGemini.chatCalled, isTrue);
     });
 
-    test('4. Partial error preserved: no duplicate re-run if error happens after tokens', () async {
+    test(
+        '4. Partial error preserved: no duplicate re-run if error happens after tokens',
+        () async {
       final controller = StreamController<String>();
       final mockGemini = _FakeStreamingGeminiService(
         streamGenerator: () => controller.stream,
@@ -413,12 +451,15 @@ void main() {
 
       expect(provider.isLoading, isFalse);
       expect(provider.messages.last.status, equals(MessageStatus.error));
-      expect(provider.messages.last.content, equals('Sebagian teks berhasil diterima...'));
+      expect(provider.messages.last.content,
+          equals('Sebagian teks berhasil diterima...'));
       // Fallback chat monolitik TIDAK boleh dipanggil untuk mencegah duplikasi
       expect(mockGemini.chatCalled, isFalse);
     });
 
-    test('5. Papers and active context provenance preserved during and after streaming', () async {
+    test(
+        '5. Papers and active context provenance preserved during and after streaming',
+        () async {
       const samplePaper = ArxivPaper(
         id: '2401.00001',
         title: 'Attention Mechanism in Modern LLMs',
@@ -467,7 +508,9 @@ void main() {
       expect(provider.activeContexts, isNotEmpty);
     });
 
-    test('6. Empty stream without tokens triggers monolithic fallback and completes with done', () async {
+    test(
+        '6. Empty stream without tokens triggers monolithic fallback and completes with done',
+        () async {
       final mockGemini = _FakeStreamingGeminiService(
         streamGenerator: () => const Stream.empty(),
         fallbackResponse: 'Jawaban fallback untuk stream kosong',
@@ -483,13 +526,17 @@ void main() {
 
       expect(provider.isLoading, isFalse);
       expect(provider.messages.last.status, equals(MessageStatus.done));
-      expect(provider.messages.last.content, equals('Jawaban fallback untuk stream kosong'));
+      expect(provider.messages.last.content,
+          equals('Jawaban fallback untuk stream kosong'));
       expect(mockGemini.chatCalled, isTrue);
     });
 
-    test('7. Initial timeout before first token triggers monolithic fallback with status message', () async {
+    test(
+        '7. Initial timeout before first token triggers monolithic fallback with status message',
+        () async {
       final mockGemini = _FakeStreamingGeminiService(
-        streamGenerator: () => Stream.error(TimeoutException('Batas waktu koneksi awal stream (45 detik) terlampaui.')),
+        streamGenerator: () => Stream.error(TimeoutException(
+            'Batas waktu koneksi awal stream (45 detik) terlampaui.')),
         fallbackResponse: 'Jawaban sukses setelah timeout stream',
       );
 
@@ -503,14 +550,17 @@ void main() {
 
       expect(provider.isLoading, isFalse);
       expect(provider.messages.last.status, equals(MessageStatus.done));
-      expect(provider.messages.last.content, equals('Jawaban sukses setelah timeout stream'));
+      expect(provider.messages.last.content,
+          equals('Jawaban sukses setelah timeout stream'));
       expect(mockGemini.chatCalled, isTrue);
     });
 
-    test('8. Fallback failure marks message with a safe error status', () async {
+    test('8. Fallback failure marks message with a safe error status',
+        () async {
       final mockGemini = _FakeStreamingGeminiService(
         streamGenerator: () => Stream.error(Exception('Koneksi stream gagal')),
-        chatHandler: () async => throw Exception('Koneksi fallback juga gagal (Quota exceeded)'),
+        chatHandler: () async =>
+            throw Exception('Koneksi fallback juga gagal (Quota exceeded)'),
       );
 
       final provider = SciChatProvider(
@@ -527,7 +577,8 @@ void main() {
       expect(provider.appState, equals(AppState.error));
     });
 
-    test('9. DNS failure is safe and retry reuses the original question once', () async {
+    test('9. DNS failure is safe and retry reuses the original question once',
+        () async {
       var fallbackAttempts = 0;
       final mockGemini = _FakeStreamingGeminiService(
         streamGenerator: () => Stream.error(
@@ -536,7 +587,8 @@ void main() {
         chatHandler: () async {
           fallbackAttempts++;
           if (fallbackAttempts == 1) {
-            throw Exception('ClientException: SocketException: Failed host lookup');
+            throw Exception(
+                'ClientException: SocketException: Failed host lookup');
           }
           return 'Jawaban setelah koneksi pulih.';
         },
@@ -553,18 +605,21 @@ void main() {
       expect(failedMessage.status, MessageStatus.error);
       expect(failedMessage.errorType, ChatErrorType.connection);
       expect(failedMessage.content, isEmpty);
-      expect(provider.messages.where((message) => message.isUser), hasLength(1));
+      expect(
+          provider.messages.where((message) => message.isUser), hasLength(1));
 
       await provider.retryMessage(failedMessage.id);
 
       expect(fallbackAttempts, 2);
-      expect(provider.messages.where((message) => message.isUser), hasLength(1));
+      expect(
+          provider.messages.where((message) => message.isUser), hasLength(1));
       expect(provider.messages.first.content, 'Jelaskan metode ini');
       expect(provider.messages.last.status, MessageStatus.done);
       expect(provider.messages.last.content, 'Jawaban setelah koneksi pulih.');
     });
 
-    test('10. Dismissing an old error preserves an active request state', () async {
+    test('10. Dismissing an old error preserves an active request state',
+        () async {
       var streamCalls = 0;
       final responseController = StreamController<String>();
       final mockGemini = _FakeStreamingGeminiService(
@@ -592,7 +647,8 @@ void main() {
       provider.dismissError(errorId);
       expect(provider.isLoading, isTrue);
       expect(provider.appState, isNot(AppState.ready));
-      expect(provider.messages.any((message) => message.id == errorId), isFalse);
+      expect(
+          provider.messages.any((message) => message.id == errorId), isFalse);
 
       responseController.add('Respons aktif selesai.');
       await responseController.close();
@@ -617,12 +673,14 @@ void main() {
 
       // Saat fallback sedang berjalan:
       expect(provider.isLoading, isTrue);
-      expect(provider.statusText, equals('Streaming gagal, mencoba metode alternatif...'));
+      expect(provider.statusText,
+          equals('Streaming gagal, mencoba metode alternatif...'));
 
       // Mencoba mengirim pesan kedua selama fallback berlangsung:
       await provider.sendMessage('Pesan 2 double-send saat fallback');
       expect(provider.messages.where((m) => m.isUser).length, equals(1));
-      expect(provider.messages.first.content, equals('Pesan 1 yang memicu fallback'));
+      expect(provider.messages.first.content,
+          equals('Pesan 1 yang memicu fallback'));
 
       // Selesaikan fallback
       fallbackCompleter.complete('Jawaban fallback pesan 1');
@@ -630,12 +688,14 @@ void main() {
 
       expect(provider.isLoading, isFalse);
       expect(provider.messages.last.status, equals(MessageStatus.done));
-      expect(provider.messages.last.content, equals('Jawaban fallback pesan 1'));
+      expect(
+          provider.messages.last.content, equals('Jawaban fallback pesan 1'));
     });
   });
 
   group('UI ChatBubble Streaming Widget Tests', () {
-    testWidgets('1. ChatBubble renders streaming indicator and growing content', (tester) async {
+    testWidgets('1. ChatBubble renders streaming indicator and growing content',
+        (tester) async {
       final message = ChatMessage(
         id: 'msg-stream',
         role: MessageRole.assistant,
@@ -660,7 +720,12 @@ void main() {
       await tester.pump(const Duration(milliseconds: 300));
 
       final selectableFinder = find.byWidgetPredicate(
-        (w) => w is SelectableText && (w.textSpan?.toPlainText().contains('Teks yang sedang dialirkan...') ?? false),
+        (w) =>
+            w is SelectableText &&
+            (w.textSpan
+                    ?.toPlainText()
+                    .contains('Teks yang sedang dialirkan...') ??
+                false),
       );
       expect(selectableFinder, findsOneWidget);
       expect(find.text('Menulis respons...'), findsOneWidget);
@@ -669,7 +734,8 @@ void main() {
       expect(find.text('Simpan Insight'), findsNothing);
     });
 
-    testWidgets('2. ChatBubble renders done message and enables insight button', (tester) async {
+    testWidgets('2. ChatBubble renders done message and enables insight button',
+        (tester) async {
       final message = ChatMessage(
         id: 'msg-done',
         role: MessageRole.assistant,
@@ -701,14 +767,19 @@ void main() {
       await tester.pump(const Duration(milliseconds: 300));
 
       final selectableFinder = find.byWidgetPredicate(
-        (w) => w is SelectableText && (w.textSpan?.toPlainText().contains('Respons final lengkap.') ?? false),
+        (w) =>
+            w is SelectableText &&
+            (w.textSpan?.toPlainText().contains('Respons final lengkap.') ??
+                false),
       );
       expect(selectableFinder, findsOneWidget);
       expect(find.text('Menulis respons...'), findsNothing);
       expect(find.text('Simpan Insight'), findsOneWidget);
     });
 
-    testWidgets('3. ChatBubble renders partial text plus error message on failure', (tester) async {
+    testWidgets(
+        '3. ChatBubble renders partial text plus error message on failure',
+        (tester) async {
       final message = ChatMessage(
         id: 'msg-error',
         role: MessageRole.assistant,
@@ -733,14 +804,21 @@ void main() {
       await tester.pump(const Duration(milliseconds: 300));
 
       final selectableFinder = find.byWidgetPredicate(
-        (w) => w is SelectableText && (w.textSpan?.toPlainText().contains('Paragraf pertama selesai tapi koneksi putus.') ?? false),
+        (w) =>
+            w is SelectableText &&
+            (w.textSpan
+                    ?.toPlainText()
+                    .contains('Paragraf pertama selesai tapi koneksi putus.') ??
+                false),
       );
       expect(selectableFinder, findsOneWidget);
       expect(find.text('Respons terputus'), findsOneWidget);
       expect(find.text('Menulis respons...'), findsNothing);
     });
 
-    testWidgets('4. ChatBubble renders a safe connection error and exposes actions', (tester) async {
+    testWidgets(
+        '4. ChatBubble renders a safe connection error and exposes actions',
+        (tester) async {
       var retryPressed = 0;
       var dismissPressed = 0;
       final message = ChatMessage(
@@ -771,7 +849,8 @@ void main() {
 
       expect(find.text('Koneksi internet terputus'), findsOneWidget);
       expect(
-        find.text('Pesanmu belum berhasil dikirim. Periksa koneksi internet, lalu coba lagi.'),
+        find.text(
+            'Pesanmu belum berhasil dikirim. Periksa koneksi internet, lalu coba lagi.'),
         findsOneWidget,
       );
       expect(find.text('SocketException'), findsNothing);
@@ -784,7 +863,8 @@ void main() {
       expect(dismissPressed, 1);
     });
 
-    testWidgets('5. ChatBubble hides retry for an authentication error', (tester) async {
+    testWidgets('5. ChatBubble hides retry for an authentication error',
+        (tester) async {
       final message = ChatMessage(
         id: 'msg-authentication-error',
         role: MessageRole.assistant,
@@ -816,7 +896,9 @@ void main() {
       expect(find.text('Tutup'), findsOneWidget);
     });
 
-    testWidgets('6. ChatBubble shows compact indicator during streaming and collapsible sources section when done', (tester) async {
+    testWidgets(
+        '6. ChatBubble shows compact indicator during streaming and collapsible sources section when done',
+        (tester) async {
       const samplePaper = ArxivPaper(
         id: '2401.00001',
         title: 'Attention Mechanism in Modern LLMs',
@@ -906,7 +988,9 @@ void main() {
       expect(find.byType(PaperCard), findsNothing);
     });
 
-    testWidgets('5. ChatScreen detects user scroll up and shows Kembali ke respons terbaru button', (tester) async {
+    testWidgets(
+        '5. ChatScreen detects user scroll up and shows Kembali ke respons terbaru button',
+        (tester) async {
       final mockGemini = _FakeStreamingGeminiService(
         streamGenerator: () => const Stream.empty(),
       );
@@ -922,7 +1006,8 @@ void main() {
           ChatMessage(
             id: 'user-$i',
             role: MessageRole.user,
-            content: 'Pertanyaan pengguna ke-$i yang cukup panjang untuk mengisi ruang layar ponsel...',
+            content:
+                'Pertanyaan pengguna ke-$i yang cukup panjang untuk mengisi ruang layar ponsel...',
             status: MessageStatus.done,
             timestamp: DateTime.now(),
           ),
@@ -931,7 +1016,8 @@ void main() {
           ChatMessage(
             id: 'assistant-$i',
             role: MessageRole.assistant,
-            content: 'Jawaban asisten ilmiah ke-$i dengan analisis data dan metodologi komprehensif...',
+            content:
+                'Jawaban asisten ilmiah ke-$i dengan analisis data dan metodologi komprehensif...',
             status: MessageStatus.done,
             timestamp: DateTime.now(),
           ),
@@ -958,18 +1044,22 @@ void main() {
       await tester.drag(listFinder, const Offset(0, 500));
       await tester.pumpAndSettle();
 
-      // Tombol 'Kembali ke respons terbaru' harus muncul
-      expect(find.text('Kembali ke respons terbaru'), findsOneWidget);
+      // Tombol 'Kembali ke respons terbaru' harus muncul tanpa teks visual
+      expect(find.byKey(const Key('scrollToBottomButton')), findsOneWidget);
+      expect(find.text('Kembali ke respons terbaru'), findsNothing);
+      expect(find.byTooltip('Kembali ke respons terbaru'), findsOneWidget);
 
       // Tap tombol 'Kembali ke respons terbaru'
-      await tester.tap(find.text('Kembali ke respons terbaru'));
+      await tester.tap(find.byKey(const Key('scrollToBottomButton')));
       await tester.pumpAndSettle();
 
       // Tombol menghilang setelah kembali ke bawah
-      expect(find.text('Kembali ke respons terbaru'), findsNothing);
+      expect(find.byKey(const Key('scrollToBottomButton')), findsNothing);
     });
 
-    testWidgets('6. ChatScreen Home empty state has scroll padding of 240 and no restrictive outer padding', (tester) async {
+    testWidgets(
+        '6. ChatScreen Home empty state has scroll padding of 240 and no restrictive outer padding',
+        (tester) async {
       final provider = SciChatProvider(
         storageService: MockStorageService(),
       );
@@ -989,14 +1079,17 @@ void main() {
       final scrollFinder = find.byType(SingleChildScrollView);
       expect(scrollFinder, findsWidgets);
 
-      final scrollWidget = tester.widget<SingleChildScrollView>(scrollFinder.first);
+      final scrollWidget =
+          tester.widget<SingleChildScrollView>(scrollFinder.first);
       expect((scrollWidget.padding as EdgeInsets).bottom, equals(240));
 
       // Pastikan suggestion chips dapat tampil
       expect(find.text('Coba tanyakan'), findsOneWidget);
     });
 
-    testWidgets('7. ChatBubble renders contextual follow-up suggestions and responds to tap', (tester) async {
+    testWidgets(
+        '7. ChatBubble renders contextual follow-up suggestions and responds to tap',
+        (tester) async {
       String? tappedSuggestion;
       final followUpMsg = ChatMessage(
         id: 'msg_follow_up_test',
@@ -1039,20 +1132,30 @@ void main() {
       await tester.pumpAndSettle();
 
       // Header saran lanjutan
-      expect(find.text('Eksplorasi topik tertentu lebih jauh:'), findsOneWidget);
+      expect(
+          find.text('Eksplorasi topik tertentu lebih jauh:'), findsOneWidget);
       // Tiga kartu saran
-      expect(find.text('Bagaimana perbandingan akurasi dengan transformer standar?'), findsOneWidget);
-      expect(find.text('Apa limitasi utama dari pendekatan ini?'), findsOneWidget);
-      expect(find.text('Bagaimana cara mengimplementasikannya pada skala besar?'), findsOneWidget);
+      expect(
+          find.text(
+              'Bagaimana perbandingan akurasi dengan transformer standar?'),
+          findsOneWidget);
+      expect(
+          find.text('Apa limitasi utama dari pendekatan ini?'), findsOneWidget);
+      expect(
+          find.text('Bagaimana cara mengimplementasikannya pada skala besar?'),
+          findsOneWidget);
 
       // Tap saran kedua
       await tester.tap(find.text('Apa limitasi utama dari pendekatan ini?'));
       await tester.pumpAndSettle();
 
-      expect(tappedSuggestion, equals('Apa limitasi utama dari pendekatan ini?'));
+      expect(
+          tappedSuggestion, equals('Apa limitasi utama dari pendekatan ini?'));
     });
 
-    testWidgets('8. ChatScreen renders Bottom Fade Gradient overlay with IgnorePointer', (tester) async {
+    testWidgets(
+        '8. ChatScreen renders Bottom Fade Gradient overlay with IgnorePointer',
+        (tester) async {
       final provider = SciChatProvider(
         storageService: MockStorageService(),
       );
@@ -1073,7 +1176,8 @@ void main() {
       expect(ignorePointerFinders, findsWidgets);
 
       bool foundFadeGradient = false;
-      for (final element in tester.widgetList<IgnorePointer>(ignorePointerFinders)) {
+      for (final element
+          in tester.widgetList<IgnorePointer>(ignorePointerFinders)) {
         if (element.child is DecoratedBox) {
           final box = element.child as DecoratedBox;
           if (box.decoration is BoxDecoration) {
@@ -1089,7 +1193,9 @@ void main() {
       expect(foundFadeGradient, isTrue);
     });
 
-    testWidgets('9. ChatScreen renders Top Fade Gradient overlay alongside Bottom Fade Gradient', (tester) async {
+    testWidgets(
+        '9. ChatScreen renders Top Fade Gradient overlay alongside Bottom Fade Gradient',
+        (tester) async {
       final provider = SciChatProvider(
         storageService: MockStorageService(),
       );
@@ -1109,7 +1215,8 @@ void main() {
       expect(ignorePointerFinders, findsWidgets);
 
       final linearGradients = <LinearGradient>[];
-      for (final element in tester.widgetList<IgnorePointer>(ignorePointerFinders)) {
+      for (final element
+          in tester.widgetList<IgnorePointer>(ignorePointerFinders)) {
         if (element.child is DecoratedBox) {
           final box = element.child as DecoratedBox;
           if (box.decoration is BoxDecoration) {
@@ -1125,8 +1232,10 @@ void main() {
       expect(linearGradients.length, greaterThanOrEqualTo(2));
 
       // Satu gradasi mengarah ke topCenter (top fade), satu ke bottomCenter (bottom fade)
-      final hasTopFade = linearGradients.any((g) => g.end == Alignment.topCenter && g.begin == Alignment.bottomCenter);
-      final hasBottomFade = linearGradients.any((g) => g.end == Alignment.bottomCenter && g.begin == Alignment.topCenter);
+      final hasTopFade = linearGradients.any((g) =>
+          g.end == Alignment.topCenter && g.begin == Alignment.bottomCenter);
+      final hasBottomFade = linearGradients.any((g) =>
+          g.end == Alignment.bottomCenter && g.begin == Alignment.topCenter);
       expect(hasTopFade, isTrue);
       expect(hasBottomFade, isTrue);
 
@@ -1139,7 +1248,9 @@ void main() {
       expect(appBar.bottom, isNull);
     });
 
-    testWidgets('10. ChatBubble renders follow-up suggestions with markdown terms without raw asterisks', (tester) async {
+    testWidgets(
+        '10. ChatBubble renders follow-up suggestions with markdown terms without raw asterisks',
+        (tester) async {
       String? tappedSuggestion;
       final followUpMsg = ChatMessage(
         id: 'msg-test-markdown-chips',
@@ -1198,7 +1309,8 @@ void main() {
       await tester.tap(find.textContaining('continuous-time'));
       await tester.pumpAndSettle();
 
-      expect(tappedSuggestion, equals('Bagaimana perbandingan continuous-time vs discrete model?'));
+      expect(tappedSuggestion,
+          equals('Bagaimana perbandingan continuous-time vs discrete model?'));
       expect(tappedSuggestion?.contains('*'), isFalse);
     });
   });

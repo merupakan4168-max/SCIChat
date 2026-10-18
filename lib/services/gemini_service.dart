@@ -41,12 +41,19 @@ class GeminiService {
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
-        final models = (data['data'] as List).map((m) => m['id'].toString()).toList();
-        
+        final models =
+            (data['data'] as List).map((m) => m['id'].toString()).toList();
+
         // Prioritaskan model flash yang terbukti mendukung streaming SSE pada Agnes AI
-        final flashModels = models.where((m) => m.toLowerCase().contains('flash') && !m.toLowerCase().contains('video') && !m.toLowerCase().contains('image')).toList();
-        final freeModels = models.where((m) => m.toLowerCase().contains('free')).toList();
-        
+        final flashModels = models
+            .where((m) =>
+                m.toLowerCase().contains('flash') &&
+                !m.toLowerCase().contains('video') &&
+                !m.toLowerCase().contains('image'))
+            .toList();
+        final freeModels =
+            models.where((m) => m.toLowerCase().contains('free')).toList();
+
         if (models.contains('agnes-3.0-flash')) {
           _resolvedModel = 'agnes-3.0-flash';
         } else if (flashModels.isNotEmpty) {
@@ -72,25 +79,28 @@ class GeminiService {
     return _resolvedModel!;
   }
 
-  Future<http.Response> _postWithRetry(String endpoint, String body, {int maxRetries = 3}) async {
+  Future<http.Response> _postWithRetry(String endpoint, String body,
+      {int maxRetries = 3}) async {
     for (int i = 0; i < maxRetries; i++) {
       try {
         final client = _client ?? http.Client();
         final shouldClose = _client == null;
         http.Response response;
         try {
-          response = await client.post(
-            Uri.parse('$_baseUrl$endpoint'),
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': 'Bearer $apiKey',
-            },
-            body: body,
-          ).timeout(const Duration(seconds: 60));
+          response = await client
+              .post(
+                Uri.parse('$_baseUrl$endpoint'),
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Authorization': 'Bearer $apiKey',
+                },
+                body: body,
+              )
+              .timeout(const Duration(seconds: 60));
         } finally {
           if (shouldClose) client.close();
         }
-        
+
         if (response.statusCode == 503 || response.statusCode == 429) {
           if (i == maxRetries - 1) return response;
           await Future.delayed(Duration(seconds: 2 * (i + 1)));
@@ -131,6 +141,17 @@ Integritas Konteks & Referensi Multi-Turn:
   3. Inferensi: Jika kamu membuat analisis, deduksi, atau hipotesis yang melampaui teks langsung, nyatakan secara eksplisit sebagai "inferensi" atau "analisis logis", bukan sebagai fakta yang diklaim oleh penulis paper.
   4. Naskah Tanpa Bukti: Jika pada [RETRIEVED PAPERS] tercantum "Abstract: Abstrak tidak tersedia" dan tidak ada "Full text excerpt", dilarang keras mengarang metodologi penelitian, temuan eksperimen, atau angka statistik seolah-olah terverifikasi dari isi paper. Nyatakan secara jujur bahwa abstrak maupun naskah dokumen tidak tersedia, dan jangan berasumsi di luar metadata judul dan pengarang.
 
+Saran Pertanyaan Lanjutan:
+Di akhir setiap jawabanmu, setelah seluruh teks jawaban ilmiah selesai ditulis, sertakan tepat satu blok saran pertanyaan lanjutan dalam format:
+<follow_up>["Saran 1", "Saran 2", "Saran 3"]</follow_up>
+Aturan blok saran lanjutan:
+1. Buat tepat 3 saran pertanyaan lanjutan yang relevan dan mendalam untuk dieksplorasi lebih jauh.
+2. Prioritaskan metodologi riset, perbandingan temuan, limitasi, bukti eksperimental, atau implikasi praktis.
+3. Gunakan Bahasa Indonesia ilmiah yang ringkas (maksimal 10-12 kata per pertanyaan) sebagai teks biasa polos tanpa tanda bintang (*) atau formatting markdown.
+4. Nilai di dalam tag <follow_up> HARUS berupa array JSON valid berisi string, persis seperti format contoh di atas.
+5. JANGAN gunakan pembungkus Markdown code block (seperti ``` atau ```json) di sekeliling tag <follow_up>.
+6. Letakkan blok ini persis di bagian paling akhir jawaban.
+
 Gunakan Bahasa Indonesia dalam setiap jawabanmu.
 ''';
 
@@ -144,7 +165,9 @@ Gunakan Bahasa Indonesia dalam setiap jawabanmu.
     for (int i = 0; i < papers.length; i++) {
       final p = papers[i];
       final fullText = fullTexts[p.id];
-      final doiStr = (p.doi != null && p.doi!.trim().isNotEmpty) ? p.doi!.trim() : 'Tidak tersedia';
+      final doiStr = (p.doi != null && p.doi!.trim().isNotEmpty)
+          ? p.doi!.trim()
+          : 'Tidak tersedia';
       final authorsStr = p.authors.isEmpty
           ? 'Penulis tidak diketahui'
           : '${p.authors.take(5).join(', ')}${p.authors.length > 5 ? ' et al.' : ''}';
@@ -158,7 +181,9 @@ Gunakan Bahasa Indonesia dalam setiap jawabanmu.
       buffer.writeln('ID: ${p.shortId}');
       buffer.writeln('DOI: $doiStr');
       buffer.writeln('URL: ${p.absUrl}');
-      final abstractStr = ArxivPaper.isAbstractUsable(p.summary) ? p.summary.trim() : 'Abstrak tidak tersedia';
+      final abstractStr = ArxivPaper.isAbstractUsable(p.summary)
+          ? p.summary.trim()
+          : 'Abstrak tidak tersedia';
       buffer.writeln('Abstract: $abstractStr');
       if (fullText != null && fullText.trim().isNotEmpty) {
         buffer.writeln('Full text excerpt:\n$fullText');
@@ -177,14 +202,15 @@ Gunakan Bahasa Indonesia dalam setiap jawabanmu.
     Map<String, String> fullTexts = const {},
     bool eli5Mode = false,
     AiSkill skill = AiSkill.none,
-  }) => _buildChatMessages(
-    history: history,
-    userMessage: userMessage,
-    papers: papers,
-    fullTexts: fullTexts,
-    eli5Mode: eli5Mode,
-    skill: skill,
-  );
+  }) =>
+      _buildChatMessages(
+        history: history,
+        userMessage: userMessage,
+        papers: papers,
+        fullTexts: fullTexts,
+        eli5Mode: eli5Mode,
+        skill: skill,
+      );
 
   List<Map<String, String>> _buildChatMessages({
     required List<ChatMessage> history,
@@ -195,18 +221,22 @@ Gunakan Bahasa Indonesia dalam setiap jawabanmu.
     AiSkill skill = AiSkill.none,
   }) {
     final messages = <Map<String, String>>[];
-    final eli5Instruction = eli5Mode 
+    final eli5Instruction = eli5Mode
         ? "\n\nPENTING: Mode 'Jelaskan Seperti Anak 5 Tahun' (ELI5) AKTIF. Jelaskan seluruh konsep ilmiah sesederhana mungkin menggunakan analogi kehidupan sehari-hari. JANGAN gunakan jargon akademis sama sekali."
         : "";
     final skillInstruction = skill.systemPrompt;
-    messages.add({'role': 'system', 'content': _systemPrompt + eli5Instruction + skillInstruction});
+    messages.add({
+      'role': 'system',
+      'content': _systemPrompt + eli5Instruction + skillInstruction
+    });
 
     // If history already ends with the pending user message, exclude it from recentHistory
     List<ChatMessage> effectiveHistory = history;
     if (effectiveHistory.isNotEmpty &&
         effectiveHistory.last.isUser &&
         effectiveHistory.last.content.trim() == userMessage.trim()) {
-      effectiveHistory = effectiveHistory.sublist(0, effectiveHistory.length - 1);
+      effectiveHistory =
+          effectiveHistory.sublist(0, effectiveHistory.length - 1);
     }
 
     final recentHistory = effectiveHistory.length > 20
@@ -238,8 +268,10 @@ Gunakan Bahasa Indonesia dalam setiap jawabanmu.
           turnPapers = msg.papers;
         }
 
-        final unincludedPapers = turnPapers.where((p) => !includedPaperIds.contains(p.id)).toList();
-        if (unincludedPapers.isNotEmpty && !msg.content.contains('[RETRIEVED PAPERS]')) {
+        final unincludedPapers =
+            turnPapers.where((p) => !includedPaperIds.contains(p.id)).toList();
+        if (unincludedPapers.isNotEmpty &&
+            !msg.content.contains('[RETRIEVED PAPERS]')) {
           for (final p in unincludedPapers) {
             includedPaperIds.add(p.id);
           }
@@ -255,13 +287,15 @@ Gunakan Bahasa Indonesia dalam setiap jawabanmu.
     }
 
     // For current turn:
-    final unincludedCurrentPapers = papers.where((p) => !includedPaperIds.contains(p.id)).toList();
+    final unincludedCurrentPapers =
+        papers.where((p) => !includedPaperIds.contains(p.id)).toList();
     String context = '';
     if (unincludedCurrentPapers.isNotEmpty) {
       for (final p in unincludedCurrentPapers) {
         includedPaperIds.add(p.id);
       }
-      context = formatPapersContext(unincludedCurrentPapers, fullTexts: fullTexts);
+      context =
+          formatPapersContext(unincludedCurrentPapers, fullTexts: fullTexts);
     }
 
     final fullMessage = context.isNotEmpty
@@ -299,7 +333,8 @@ Gunakan Bahasa Indonesia dalam setiap jawabanmu.
     final response = await _postWithRetry('/chat/completions', body);
     if (response.statusCode != 200) {
       final err = jsonDecode(response.body);
-      throw Exception(err['error']?['message'] ?? 'Kesalahan API Agnes ${response.statusCode}');
+      throw Exception(err['error']?['message'] ??
+          'Kesalahan API Agnes ${response.statusCode}');
     }
 
     final json = jsonDecode(response.body);
@@ -366,7 +401,8 @@ Gunakan Bahasa Indonesia dalam setiap jawabanmu.
     messages.add({'role': 'assistant', 'content': partialAssistantResponse});
     messages.add({
       'role': 'user',
-      'content': 'Lanjutkan respons di atas persis dari titik terakhir tanpa mengulang teks yang sudah ditulis sebelumnya.',
+      'content':
+          'Lanjutkan respons di atas persis dari titik terakhir tanpa mengulang teks yang sudah ditulis sebelumnya.',
     });
 
     final model = await _getModel();
@@ -400,7 +436,8 @@ Gunakan Bahasa Indonesia dalam setiap jawabanmu.
     _lastStreamFinishReason = null;
 
     try {
-      final request = http.Request('POST', Uri.parse('$_baseUrl/chat/completions'));
+      final request =
+          http.Request('POST', Uri.parse('$_baseUrl/chat/completions'));
       request.headers.addAll({
         'Content-Type': 'application/json',
         'Authorization': 'Bearer $apiKey',
@@ -411,24 +448,29 @@ Gunakan Bahasa Indonesia dalam setiap jawabanmu.
 
       // Naikkan batas waktu koneksi awal ke 45 detik untuk menangani prefill kueri berkonteks besar
       final streamedResponse = await client.send(request).timeout(
-        const Duration(seconds: 45),
-        onTimeout: () => throw TimeoutException('Batas waktu koneksi awal $debugLabel (45 detik) terlampaui.'),
-      );
+            const Duration(seconds: 45),
+            onTimeout: () => throw TimeoutException(
+                'Batas waktu koneksi awal $debugLabel (45 detik) terlampaui.'),
+          );
 
       final connectDurationMs = connectStopwatch.elapsedMilliseconds;
-      debugPrint('[AI_DEBUG] Respons HTTP awal $debugLabel diterima dalam ${connectDurationMs}ms (Status: ${streamedResponse.statusCode})');
+      debugPrint(
+          '[AI_DEBUG] Respons HTTP awal $debugLabel diterima dalam ${connectDurationMs}ms (Status: ${streamedResponse.statusCode})');
 
       if (streamedResponse.statusCode != 200) {
         final errBody = await streamedResponse.stream.bytesToString().timeout(
-          const Duration(seconds: 5),
-          onTimeout: () => '',
-        );
-        debugPrint('[AI_DEBUG] $debugLabel respons HTTP non-200, panjang error body: ${errBody.length}');
+              const Duration(seconds: 5),
+              onTimeout: () => '',
+            );
+        debugPrint(
+            '[AI_DEBUG] $debugLabel respons HTTP non-200, panjang error body: ${errBody.length}');
         try {
           final errJson = jsonDecode(errBody);
-          throw Exception(errJson['error']?['message'] ?? 'Kesalahan API Agnes ${streamedResponse.statusCode}');
+          throw Exception(errJson['error']?['message'] ??
+              'Kesalahan API Agnes ${streamedResponse.statusCode}');
         } catch (e) {
-          if (e is Exception && !e.toString().contains('FormatException')) rethrow;
+          if (e is Exception && !e.toString().contains('FormatException'))
+            rethrow;
           throw Exception('Kesalahan API Agnes ${streamedResponse.statusCode}');
         }
       }
@@ -437,14 +479,14 @@ Gunakan Bahasa Indonesia dalam setiap jawabanmu.
           .transform(utf8.decoder)
           .transform(const LineSplitter())
           .timeout(
-            inactivityTimeout,
-            onTimeout: (sink) {
-              sink.addError(TimeoutException(
-                'Batas waktu inaktivitas $debugLabel (${inactivityTimeout.inSeconds} detik) terlampaui.',
-              ));
-              sink.close();
-            },
-          );
+        inactivityTimeout,
+        onTimeout: (sink) {
+          sink.addError(TimeoutException(
+            'Batas waktu inaktivitas $debugLabel (${inactivityTimeout.inSeconds} detik) terlampaui.',
+          ));
+          sink.close();
+        },
+      );
 
       await for (final line in lineStream) {
         final trimmed = line.trim();
@@ -468,10 +510,12 @@ Gunakan Bahasa Indonesia dalam setiap jawabanmu.
 
           if (parsedJson is Map<String, dynamic>) {
             // Periksa payload JSON yang memuat objek error eksplisit
-            if (parsedJson.containsKey('error') && parsedJson['error'] != null) {
+            if (parsedJson.containsKey('error') &&
+                parsedJson['error'] != null) {
               final err = parsedJson['error'];
               final errMsg = err is Map
-                  ? (err['message']?.toString() ?? 'Kesalahan dari server stream')
+                  ? (err['message']?.toString() ??
+                      'Kesalahan dari server stream')
                   : err.toString();
               debugPrint('[AI_DEBUG] Server mengirim error dalam payload SSE');
               throw Exception('SSE Error: $errMsg');
@@ -484,7 +528,8 @@ Gunakan Bahasa Indonesia dalam setiap jawabanmu.
                 final finishReason = firstChoice['finish_reason'];
                 if (finishReason is String && finishReason.isNotEmpty) {
                   _lastStreamFinishReason = finishReason;
-                  debugPrint('[AI_DEBUG] Stream finish_reason terdeteksi: $finishReason');
+                  debugPrint(
+                      '[AI_DEBUG] Stream finish_reason terdeteksi: $finishReason');
                 }
                 final delta = firstChoice['delta'];
                 if (delta is Map) {
@@ -504,9 +549,11 @@ Gunakan Bahasa Indonesia dalam setiap jawabanmu.
       if (_lastStreamFinishReason == null && chunkCount > 0) {
         _lastStreamFinishReason = 'stop';
       }
-      debugPrint('[AI_DEBUG] $debugLabel selesai normal. Total event: $chunkCount, Total karakter: $totalChars');
+      debugPrint(
+          '[AI_DEBUG] $debugLabel selesai normal. Total event: $chunkCount, Total karakter: $totalChars');
     } catch (e) {
-      debugPrint('[AI_DEBUG] $debugLabel keluar dengan error: ${e.runtimeType}');
+      debugPrint(
+          '[AI_DEBUG] $debugLabel keluar dengan error: ${e.runtimeType}');
       rethrow;
     } finally {
       if (shouldClose) {
@@ -516,10 +563,10 @@ Gunakan Bahasa Indonesia dalam setiap jawabanmu.
   }
 
   Future<String> summarizePaper(ArxivPaper paper, {String? pdfText}) async {
-    final pdfContent = pdfText != null && pdfText.isNotEmpty 
-        ? '\n\nIsi Teks PDF:\n$pdfText' 
+    final pdfContent = pdfText != null && pdfText.isNotEmpty
+        ? '\n\nIsi Teks PDF:\n$pdfText'
         : '';
-        
+
     final prompt = '''
 Buatkan rangkuman makalah akademik ini untuk audiens peneliti dalam Bahasa Indonesia:
 
@@ -561,6 +608,19 @@ Harap spesifik dan presisi. Jangan tambahkan informasi yang tidak ada dalam doku
     return json['choices']?[0]?['message']?['content'] ?? '';
   }
 
+  static const _translationSystemPrompt = '''
+You are an expert scientific translator. Translate academic paper titles and abstracts accurately into the requested target language.
+Strict guidelines:
+1. Preserve scientific meaning, technical and academic terminology, citations (e.g., [1], et al.), numbers, and statistical figures.
+2. Maintain Markdown formatting, lists, bold/italic text, and line breaks.
+3. Preserve all LaTeX mathematical expressions (such as \$...\$, \$\$...\$\$, symbols like \\alpha, \\beta, equations, and operators) exactly as they are without altering the syntax.
+4. Keep standard scientific abbreviations and acronyms (e.g., DNA, CNN, LLM, COVID-19) intact or translate only where standard in academic literature.
+5. Do NOT add conversational filler, preamble, notes, or follow-up suggestions.
+''';
+
+  @visibleForTesting
+  static String get translationSystemPrompt => _translationSystemPrompt;
+
   Future<String> translateText(String text, String targetLanguage) async {
     final prompt = '''
 Terjemahkan teks berikut ke dalam $targetLanguage dengan akurat, pertahankan istilah teknis/akademis jika perlu:
@@ -569,7 +629,7 @@ $text
 ''';
 
     final messages = [
-      {'role': 'system', 'content': _systemPrompt},
+      {'role': 'system', 'content': _translationSystemPrompt},
       {'role': 'user', 'content': prompt},
     ];
 
@@ -586,6 +646,132 @@ $text
 
     final json = jsonDecode(response.body);
     return json['choices']?[0]?['message']?['content'] ?? text;
+  }
+
+  /// Menerjemahkan judul dan abstrak paper secara batch dalam 1 request LLM tunggal
+  /// dengan prompt khusus translasi akademik yang hemat token dan output JSON terstruktur.
+  Future<PaperTranslation> translatePaper({
+    required String title,
+    required String summary,
+    String targetLanguage = 'Bahasa Indonesia',
+  }) async {
+    final cleanTitle = title.trim();
+    final cleanSummary = summary.trim();
+
+    if (cleanTitle.isEmpty && cleanSummary.isEmpty) {
+      return const PaperTranslation(title: '', summary: '');
+    }
+
+    final prompt = '''
+Translate the following academic paper title and summary/abstract into $targetLanguage.
+Return ONLY a valid JSON object with exactly two keys: "title" and "summary". Do not wrap in markdown code blocks, do not add commentary or preamble.
+
+{
+  "title": ${jsonEncode(cleanTitle)},
+  "summary": ${jsonEncode(cleanSummary)}
+}
+''';
+
+    final messages = [
+      {'role': 'system', 'content': _translationSystemPrompt},
+      {'role': 'user', 'content': prompt},
+    ];
+
+    final model = await _getModel();
+    final body = jsonEncode({
+      'model': model,
+      'messages': messages,
+      'temperature': 0.3,
+      'max_tokens': 2048,
+    });
+
+    final response = await _postWithRetry('/chat/completions', body);
+    if (response.statusCode != 200) {
+      throw Exception('Translation failed with status: ${response.statusCode}');
+    }
+
+    final json = jsonDecode(response.body);
+    final content =
+        json['choices']?[0]?['message']?['content']?.toString() ?? '';
+
+    return parsePaperTranslation(
+      content,
+      expectTitle: cleanTitle.isNotEmpty,
+      expectSummary: cleanSummary.isNotEmpty,
+    );
+  }
+
+  /// Parser defensif untuk payload JSON translasi paper.
+  /// Mencegah output rusak, markdown code fence, atau respons kosong merusak UI.
+  @visibleForTesting
+  static PaperTranslation parsePaperTranslation(
+    String raw, {
+    bool expectTitle = true,
+    bool expectSummary = true,
+  }) {
+    if (raw.trim().isEmpty) {
+      throw const FormatException('Empty translation response');
+    }
+
+    String cleaned = raw.trim();
+    // Strip markdown code fence if present
+    if (cleaned.startsWith('```')) {
+      final lines = cleaned.split('\n');
+      if (lines.first.startsWith('```')) {
+        lines.removeAt(0);
+      }
+      if (lines.isNotEmpty && lines.last.trim().startsWith('```')) {
+        lines.removeLast();
+      }
+      cleaned = lines.join('\n').trim();
+    }
+
+    final firstBrace = cleaned.indexOf('{');
+    final lastBrace = cleaned.lastIndexOf('}');
+    if (firstBrace == -1 || lastBrace == -1 || lastBrace <= firstBrace) {
+      throw const FormatException(
+          'No valid JSON object found in translation response');
+    }
+
+    final jsonStr = cleaned.substring(firstBrace, lastBrace + 1);
+    dynamic decoded;
+    try {
+      decoded = jsonDecode(jsonStr);
+    } catch (_) {
+      try {
+        final sanitized = _sanitizeJsonEscapes(jsonStr);
+        decoded = jsonDecode(sanitized);
+      } catch (e) {
+        throw FormatException('Failed to decode translation JSON: $e');
+      }
+    }
+
+    if (decoded is! Map<String, dynamic>) {
+      throw const FormatException('Translation response is not a JSON object');
+    }
+
+    final tTitle = decoded['title']?.toString().trim() ?? '';
+    final tSummary = decoded['summary']?.toString().trim() ?? '';
+
+    if (expectTitle && tTitle.isEmpty) {
+      throw const FormatException(
+          'Translation response missing valid "title" field');
+    }
+    if (expectSummary && tSummary.isEmpty) {
+      throw const FormatException(
+          'Translation response missing valid "summary" field');
+    }
+
+    return PaperTranslation(title: tTitle, summary: tSummary);
+  }
+
+  /// Memperbaiki backslash unescaped (seperti pada formula LaTeX \alpha, \beta)
+  /// agar JSON tetap dapat di-decode secara valid.
+  static String _sanitizeJsonEscapes(String input) {
+    return input.replaceAllMapped(
+      RegExp(r'\\([^"\\/bfnrtu]|u(?![\da-fA-F]{4}))'),
+      (match) => '\\\\${match.group(1)}',
+    );
   }
 
   @visibleForTesting
@@ -620,7 +806,9 @@ Return ONLY the JSON, nothing else.
       final model = await _getModel();
       final body = jsonEncode({
         'model': model,
-        'messages': [{'role': 'user', 'content': prompt}],
+        'messages': [
+          {'role': 'user', 'content': prompt}
+        ],
         'temperature': 0.1,
         'max_tokens': 256,
       });
@@ -654,7 +842,8 @@ Return ONLY the JSON, nothing else.
   }) async {
     if (apiKey.trim().isEmpty) return const [];
 
-    final truncatedAnswer = aiAnswer.length > 800 ? '${aiAnswer.substring(0, 800)}…' : aiAnswer;
+    final truncatedAnswer =
+        aiAnswer.length > 800 ? '${aiAnswer.substring(0, 800)}…' : aiAnswer;
     final paperContext = papers.isNotEmpty
         ? 'Makalah terkait: ${papers.take(3).map((p) => p.title).join(", ")}'
         : '';
@@ -677,7 +866,9 @@ KEMBALIKAN HANYA array JSON berupa daftar 3 string tanpa teks pengantar atau mar
       final model = await _getModel();
       final body = jsonEncode({
         'model': model,
-        'messages': [{'role': 'user', 'content': prompt}],
+        'messages': [
+          {'role': 'user', 'content': prompt}
+        ],
         'temperature': 0.3,
         'max_tokens': 160,
       });
