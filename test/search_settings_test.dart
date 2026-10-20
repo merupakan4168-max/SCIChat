@@ -69,7 +69,7 @@ class _MockStorage extends StorageService {
   @override
   Future<List<ResearchNote>> getNotes() async => [];
   @override
-  Future<void> addNote(ResearchNote note) async {}
+  Future<bool> addNote(ResearchNote note) async => true;
   @override
   Future<void> removeNote(String noteId) async {}
   @override

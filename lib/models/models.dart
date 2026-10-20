@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 enum EvidenceLevel {
@@ -7,14 +8,97 @@ enum EvidenceLevel {
   noUsableText,
 }
 
+/// Merepresentasikan potongan teks dokumen PDF berstruktur untuk retrieval konteks lokal.
+class PdfChunk {
+  /// Sentinel nilai [pageNumber] saat informasi nomor halaman tidak tersedia dari ekstraksi.
+  static const int kUnknownPage = -1;
+
+  final String id;
+  final String text;
+  final int pageNumber;
+  final String sectionTitle;
+  final int charOffset;
+
+  const PdfChunk({
+    required this.id,
+    required this.text,
+    this.pageNumber = kUnknownPage,
+    required this.sectionTitle,
+    required this.charOffset,
+  });
+
+  PdfChunk copyWith({
+    String? id,
+    String? text,
+    int? pageNumber,
+    String? sectionTitle,
+    int? charOffset,
+  }) =>
+      PdfChunk(
+        id: id ?? this.id,
+        text: text ?? this.text,
+        pageNumber: pageNumber ?? this.pageNumber,
+        sectionTitle: sectionTitle ?? this.sectionTitle,
+        charOffset: charOffset ?? this.charOffset,
+      );
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is PdfChunk &&
+          runtimeType == other.runtimeType &&
+          id == other.id &&
+          text == other.text &&
+          pageNumber == other.pageNumber &&
+          sectionTitle == other.sectionTitle &&
+          charOffset == other.charOffset;
+
+  @override
+  int get hashCode =>
+      Object.hash(id, text, pageNumber, sectionTitle, charOffset);
+
+  @override
+  String toString() =>
+      'PdfChunk(id: $id, section: $sectionTitle, page: $pageNumber, offset: $charOffset, len: ${text.length})';
+}
+
 class PaperEvidence {
   final EvidenceLevel level;
   final String? extractedText;
+  final List<PdfChunk> chunks;
 
   const PaperEvidence({
     required this.level,
     this.extractedText,
+    this.chunks = const [],
   });
+
+  PaperEvidence copyWith({
+    EvidenceLevel? level,
+    String? extractedText,
+    List<PdfChunk>? chunks,
+  }) =>
+      PaperEvidence(
+        level: level ?? this.level,
+        extractedText: extractedText ?? this.extractedText,
+        chunks: chunks ?? this.chunks,
+      );
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is PaperEvidence &&
+          runtimeType == other.runtimeType &&
+          level == other.level &&
+          extractedText == other.extractedText &&
+          listEquals(chunks, other.chunks);
+
+  @override
+  int get hashCode => Object.hash(level, extractedText, Object.hashAll(chunks));
+
+  @override
+  String toString() =>
+      'PaperEvidence(level: $level, textLen: ${extractedText?.length ?? 0}, chunks: ${chunks.length})';
 }
 
 class ArxivPaper {
@@ -587,6 +671,16 @@ class ResearchNote {
             [],
         savedAt: DateTime.tryParse(j['savedAt'] ?? '') ?? DateTime.now(),
       );
+
+  /// Menandakan apakah catatan ini berasal dari ringkasan paper mandiri (bukan dari obrolan).
+  bool get isPaperSummary =>
+      sourceMessageId.isEmpty && sources.isNotEmpty && sources.first.id.isNotEmpty;
+
+  /// Makalah sumber utama jika catatan ini merupakan ringkasan paper mandiri.
+  ArxivPaper? get primaryPaper => isPaperSummary ? sources.first : null;
+
+  /// Menandakan apakah catatan ini berasal dari pesan obrolan riset.
+  bool get isChatInsight => sourceMessageId.isNotEmpty;
 }
 
 class SearchFilter {
@@ -625,6 +719,90 @@ const kArxivCategories = [
   'q-bio',
   'econ',
   'stat',
+];
+
+/// Model topik riset universal untuk halaman Explore.
+/// Memetakan topik yang dipilih pengguna ke taksonomi kategori spesifik arXiv
+/// dan kata kunci pencarian teks bebas (plain keywords) untuk sumber non-arXiv.
+class ExploreTopic {
+  final String id;
+  final String label;
+  final String arxivCategory;
+  final String plainKeywords;
+
+  const ExploreTopic({
+    required this.id,
+    required this.label,
+    required this.arxivCategory,
+    required this.plainKeywords,
+  });
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ExploreTopic &&
+          runtimeType == other.runtimeType &&
+          id == other.id &&
+          label == other.label &&
+          arxivCategory == other.arxivCategory &&
+          plainKeywords == other.plainKeywords;
+
+  @override
+  int get hashCode => Object.hash(id, label, arxivCategory, plainKeywords);
+
+  @override
+  String toString() => 'ExploreTopic(id: $id, label: $label)';
+}
+
+const List<ExploreTopic> kDefaultExploreTopics = [
+  ExploreTopic(
+    id: 'cs.AI',
+    label: 'Kecerdasan Buatan',
+    arxivCategory: 'cs.AI',
+    plainKeywords: 'Artificial Intelligence',
+  ),
+  ExploreTopic(
+    id: 'cs.CL',
+    label: 'Komputasi Linguistik',
+    arxivCategory: 'cs.CL',
+    plainKeywords: 'Computational Linguistics Natural Language Processing',
+  ),
+  ExploreTopic(
+    id: 'cs.CV',
+    label: 'Visi Komputer',
+    arxivCategory: 'cs.CV',
+    plainKeywords: 'Computer Vision',
+  ),
+  ExploreTopic(
+    id: 'cs.LG',
+    label: 'Machine Learning',
+    arxivCategory: 'cs.LG',
+    plainKeywords: 'Machine Learning Deep Learning',
+  ),
+  ExploreTopic(
+    id: 'stat.ML',
+    label: 'Statistika ML',
+    arxivCategory: 'stat.ML',
+    plainKeywords: 'Statistical Machine Learning Data Science',
+  ),
+  ExploreTopic(
+    id: 'math',
+    label: 'Matematika',
+    arxivCategory: 'math',
+    plainKeywords: 'Mathematics',
+  ),
+  ExploreTopic(
+    id: 'physics',
+    label: 'Fisika',
+    arxivCategory: 'physics',
+    plainKeywords: 'Physics',
+  ),
+  ExploreTopic(
+    id: 'q-bio',
+    label: 'Biologi Kuantitatif',
+    arxivCategory: 'q-bio',
+    plainKeywords: 'Quantitative Biology Bioinformatics',
+  ),
 ];
 
 /// Model yang merepresentasikan hasil translasi judul dan ringkasan paper ilmiah.

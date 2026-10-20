@@ -12,6 +12,9 @@ import '../services/gemini_service.dart';
 import '../services/storage_service.dart';
 import '../services/pdf_service.dart';
 import '../utils/follow_up_parser.dart';
+import '../utils/pdf_chunker.dart';
+import '../utils/lexical_retriever.dart';
+import '../utils/summary_context_selector.dart';
 
 enum AppState { ready, searching, thinking, streaming, error }
 
@@ -102,16 +105,43 @@ class SciChatProvider extends ChangeNotifier {
   List<ChatMessage> _messages = [];
   List<ArxivPaper> _lastSearchResults = [];
   List<ArxivPaper> _favorites = [];
+  /// Batas karakter teks hasil ekstraksi PDF untuk konteks percakapan Tanya Paper.
+  /// Menjaga konsistensi token prompt dan mencegah context window overflow.
+  static const int kChatEvidenceMaxChars = 8000;
+
+  /// Batas karakter teks hasil ekstraksi PDF untuk ringkasan paper menyeluruh.
+  static const int kSummaryEvidenceMaxChars = 40000;
+
+  /// Batas maksimum jumlah entri yang disimpan dalam [_paperEvidenceCache].
+  /// Kapasitas 24 entri cukup untuk puluhan makalah aktif tanpa memboroskan memori heap.
+  static const int kMaxEvidenceCacheEntries = 24;
+
+  /// Batas karakter maksimal untuk konteks per paper dalam multi-paper prompt.
+  static const int kMultiPaperPerPaperMaxChars = 4500;
+
+  /// Batas karakter maksimal total untuk seluruh multi-paper prompt.
+  static const int kMultiPaperTotalMaxChars = 15000;
+
+  int _contextGenerationToken = 0;
+
   List<ArxivPaper> _trendingPapers = [];
   bool _isLoadingTrending = false;
   List<ArxivPaper> _activeContexts = [];
-  Map<String, PaperEvidence> _contextEvidence = {};
+  final Map<String, PaperEvidence> _contextEvidence = {};
+  final Map<String, PaperEvidence> _paperEvidenceCache = {};
+  final Map<String, Future<PaperEvidence>> _inflightEvidence = {};
   ArxivPaper? _pendingAttachment;
   List<ResearchNote> _notes = [];
   SearchFilter _filter = const SearchFilter();
   int _currentTab = 0; // 0 = chat, 1 = favorites
   bool _isSelectionMode = false;
   Set<String> _selectedLibraryIds = {};
+  List<ArxivPaper> _explorePapers = [];
+  bool _isLoadingExplore = false;
+  String? _exploreError;
+  String _selectedExploreTopicId = 'cs.AI';
+  String _exploreSearchQuery = '';
+  int _exploreRequestId = 0;
 
   // ── Getters ───────────────────────────────────────────────────────────────
   AppState get appState => _appState;
@@ -127,6 +157,27 @@ class SciChatProvider extends ChangeNotifier {
   AiSkill get activeSkill => _activeSkill;
   List<ChatSession> get sessions => _sessions;
   String get activeSessionId => _activeSessionId;
+
+  /// Sesi riset yang sedang aktif saat ini.
+  /// Mengembalikan null jika `_activeSessionId` kosong atau tidak ditemukan dalam `_sessions`.
+  ChatSession? get activeSession {
+    if (_activeSessionId.isEmpty || _sessions.isEmpty) return null;
+    final idx = _sessions.indexWhere((s) => s.id == _activeSessionId);
+    if (idx != -1) return _sessions[idx];
+    return null;
+  }
+
+  /// Judul sesi aktif untuk tampilan antarmuka (AppBar, Drawer, dsb).
+  /// Mengembalikan 'Obrolan Baru' jika belum ada sesi aktif atau judul bernilai default 'New Chat'.
+  String get activeSessionTitle {
+    final session = activeSession;
+    if (session == null) return 'Obrolan Baru';
+    final title = session.title.trim();
+    if (title.isEmpty || title == 'New Chat') {
+      return 'Obrolan Baru';
+    }
+    return title;
+  }
   List<ChatMessage> get messages => _messages;
   List<ArxivPaper> get lastSearchResults => _lastSearchResults;
   List<ArxivPaper> get favorites => _favorites;
@@ -135,6 +186,12 @@ class SciChatProvider extends ChangeNotifier {
   bool get isLoadingTrending => _isLoadingTrending;
   List<ArxivPaper> get activeContexts => _activeContexts;
   Map<String, PaperEvidence> get contextEvidence => _contextEvidence;
+  @visibleForTesting
+  Map<String, PaperEvidence> get paperEvidenceCache => _paperEvidenceCache;
+  @visibleForTesting
+  Map<String, Future<PaperEvidence>> get inflightEvidence => _inflightEvidence;
+  @visibleForTesting
+  int get contextGenerationToken => _contextGenerationToken;
   ArxivPaper? get activePaperContext =>
       _activeContexts.isNotEmpty ? _activeContexts.first : null;
 
@@ -148,13 +205,20 @@ class SciChatProvider extends ChangeNotifier {
       _appState == AppState.streaming;
   bool get isSelectionMode => _isSelectionMode;
   Set<String> get selectedLibraryIds => _selectedLibraryIds;
+  List<ArxivPaper> get explorePapers => _explorePapers;
+  bool get isLoadingExplore => _isLoadingExplore;
+  String? get exploreError => _exploreError;
+  String get selectedExploreTopicId => _selectedExploreTopicId;
+  String get exploreSearchQuery => _exploreSearchQuery;
 
   void setActivePaper(ArxivPaper? paper) {
+    _contextGenerationToken++;
     if (paper == null) {
       _activeContexts = [];
       _contextEvidence.clear();
     } else {
       _activeContexts = [paper];
+      _contextEvidence.removeWhere((id, _) => id != paper.id);
       _retrieveEvidence([paper]);
     }
     notifyListeners();
@@ -164,21 +228,40 @@ class SciChatProvider extends ChangeNotifier {
     if (papers.length > 3) {
       throw Exception('Batas maksimal konteks riset adalah 3 makalah.');
     }
+    _contextGenerationToken++;
     _activeContexts = List.from(papers);
+    final activeIds = papers.map((p) => p.id).toSet();
+    _contextEvidence.removeWhere((id, _) => !activeIds.contains(id));
     _retrieveEvidence(papers);
     notifyListeners();
   }
 
   void removeActiveContext(String id) {
+    _contextGenerationToken++;
     _activeContexts.removeWhere((p) => p.id == id);
     _contextEvidence.remove(id);
     notifyListeners();
   }
 
   Future<void> _retrieveEvidence(List<ArxivPaper> papers) async {
+    final currentContextToken = _contextGenerationToken;
+    final currentSessionId = _activeSessionId;
+
     bool needsNotify = false;
     for (final p in papers) {
-      if (!_contextEvidence.containsKey(p.id)) {
+      final key = buildEvidenceKey(p, maxChars: kChatEvidenceMaxChars);
+      final cached = _paperEvidenceCache[key];
+      if (cached != null) {
+        _contextEvidence[p.id] = cached;
+        needsNotify = true;
+      } else if (p.pdfUrl.isEmpty) {
+        final initial = isAbstractValid(p.summary)
+            ? const PaperEvidence(level: EvidenceLevel.abstractOnly)
+            : const PaperEvidence(level: EvidenceLevel.noUsableText);
+        _cacheEvidence(key, initial);
+        _contextEvidence[p.id] = initial;
+        needsNotify = true;
+      } else if (!_contextEvidence.containsKey(p.id)) {
         _contextEvidence[p.id] =
             const PaperEvidence(level: EvidenceLevel.loading);
         needsNotify = true;
@@ -190,60 +273,36 @@ class SciChatProvider extends ChangeNotifier {
       // Skip if already processed and not loading
       if (_contextEvidence[paper.id]?.level != EvidenceLevel.loading) return;
 
-      if (paper.pdfUrl.isEmpty) {
-        if (isAbstractValid(paper.summary)) {
-          _contextEvidence[paper.id] =
-              const PaperEvidence(level: EvidenceLevel.abstractOnly);
-        } else {
-          _contextEvidence[paper.id] =
-              const PaperEvidence(level: EvidenceLevel.noUsableText);
-        }
-        notifyListeners();
+      final evidence = await _fetchPaperEvidence(
+        paper,
+        maxChars: kChatEvidenceMaxChars,
+      );
+
+      // GUARD 1: Lindungi state jika sesi aktif telah berpindah
+      if (_activeSessionId != currentSessionId) {
+        debugPrint(
+            '[EVIDENCE_DEBUG] Discarding stale evidence for paper ${paper.id}: session switched');
         return;
       }
 
-      try {
-        String? text;
-        if (paper.pdfUrl.startsWith('file://')) {
-          final file = dart_io.File(paper.pdfUrl.replaceFirst('file://', ''));
-          final bytes = await file.readAsBytes();
-          text = await _pdf.extractTextFromBytes(bytes, maxChars: 8000);
-        } else {
-          text = await _pdf
-              .extractTextFromUrl(paper.pdfUrl, maxChars: 8000)
-              .timeout(const Duration(seconds: 20));
-        }
-
-        if (isTextUsable(text)) {
-          _contextEvidence[paper.id] = PaperEvidence(
-              level: EvidenceLevel.fullText, extractedText: text!);
-        } else {
-          if (isAbstractValid(paper.summary)) {
-            _contextEvidence[paper.id] =
-                const PaperEvidence(level: EvidenceLevel.abstractOnly);
-          } else {
-            _contextEvidence[paper.id] =
-                const PaperEvidence(level: EvidenceLevel.noUsableText);
-          }
-        }
-      } catch (e) {
+      // GUARD 2: Lindungi state jika generasi konteks berubah atau paper tidak lagi aktif.
+      // Catatan: JANGAN memanggil _contextEvidence.remove(paper.id) di sini!
+      // Pembersihan sudah ditangani secara deterministik oleh setter konteks.
+      if (_contextGenerationToken != currentContextToken ||
+          !_activeContexts.any((p) => p.id == paper.id)) {
         debugPrint(
-            '[EVIDENCE_DEBUG] Evidence retrieval failed for ${paper.id}: $e');
-        if (isAbstractValid(paper.summary)) {
-          _contextEvidence[paper.id] =
-              const PaperEvidence(level: EvidenceLevel.abstractOnly);
-        } else {
-          _contextEvidence[paper.id] =
-              const PaperEvidence(level: EvidenceLevel.noUsableText);
-        }
+            '[EVIDENCE_DEBUG] Discarding stale evidence for paper ${paper.id}: context generation changed');
+        return;
       }
+
+      _contextEvidence[paper.id] = evidence;
       notifyListeners();
     });
 
     await Future.wait(futures);
   }
 
-  bool isAbstractValid(String summary) {
+  static bool checkAbstractValid(String summary) {
     final s = summary.trim().toLowerCase();
     if (s.isEmpty) return false;
 
@@ -260,7 +319,9 @@ class SciChatProvider extends ChangeNotifier {
     return true;
   }
 
-  bool isTextUsable(String? text) {
+  bool isAbstractValid(String summary) => checkAbstractValid(summary);
+
+  static bool checkTextUsable(String? text) {
     if (text == null || text.trim().isEmpty) return false;
     final t = text.trim().toLowerCase();
 
@@ -281,6 +342,391 @@ class SciChatProvider extends ChangeNotifier {
     if (t.length < 20) return false;
 
     return true;
+  }
+
+  bool isTextUsable(String? text) => checkTextUsable(text);
+
+  /// Membangun cache / in-flight key yang stabil untuk paper dan batas karakter tertentu.
+  /// Mengutamakan ID paper atau URL PDF yang stabil, menghindari tabrakan judul,
+  /// serta memisahkan partisi cache berdasarkan maxChars.
+  static String buildEvidenceKey(ArxivPaper paper, {int? maxChars}) {
+    final String baseKey;
+    final cleanId = paper.id.trim();
+    if (cleanId.isNotEmpty) {
+      baseKey = 'id::$cleanId';
+    } else {
+      final cleanUrl = paper.pdfUrl.trim();
+      if (cleanUrl.isNotEmpty) {
+        baseKey = 'url::$cleanUrl';
+      } else {
+        final cleanTitle = paper.title.trim().toLowerCase();
+        final cleanSummary = paper.summary.trim().toLowerCase();
+        baseKey = 'hash::${'$cleanTitle||$cleanSummary'.hashCode}';
+      }
+    }
+    if (maxChars != null && maxChars > 0) {
+      return '$baseKey::maxChars::$maxChars';
+    }
+    return baseKey;
+  }
+
+  /// Menyimpan [evidence] ke dalam [_paperEvidenceCache] dengan kebijakan LRU berkapasitas [kMaxEvidenceCacheEntries].
+  /// Mencegah akumulasi memori tak terbatas pada sesi riset jangka panjang.
+  void _cacheEvidence(String key, PaperEvidence evidence) {
+    if (_paperEvidenceCache.containsKey(key)) {
+      _paperEvidenceCache.remove(key);
+    } else if (_paperEvidenceCache.length >= kMaxEvidenceCacheEntries) {
+      final oldestKey = _paperEvidenceCache.keys.first;
+      _paperEvidenceCache.remove(oldestKey);
+    }
+    _paperEvidenceCache[key] = evidence;
+  }
+
+  @visibleForTesting
+  Future<PaperEvidence> fetchPaperEvidence(
+    ArxivPaper paper, {
+    int maxChars = kChatEvidenceMaxChars,
+  }) =>
+      _fetchPaperEvidence(paper, maxChars: maxChars);
+
+  Future<PaperEvidence> _fetchPaperEvidence(
+    ArxivPaper paper, {
+    int maxChars = kChatEvidenceMaxChars,
+  }) async {
+    final key = buildEvidenceKey(paper, maxChars: maxChars);
+
+    // 1. Cek cache in-memory atau cache aktif jika sudah selesai diekstrak
+    final cached = _paperEvidenceCache[key];
+    if (cached != null) {
+      // Promosikan entri ke urutan paling baru (LRU touch)
+      _paperEvidenceCache.remove(key);
+      _paperEvidenceCache[key] = cached;
+      return cached;
+    }
+    final existing = _contextEvidence[paper.id];
+    if (existing != null && existing.level == EvidenceLevel.fullText) {
+      _cacheEvidence(key, existing);
+      return existing;
+    }
+
+    // 2. Jika tidak ada URL PDF, evaluasi abstrak langsung (kondisi deterministik paper tanpa PDF)
+    if (paper.pdfUrl.isEmpty) {
+      final result = isAbstractValid(paper.summary)
+          ? const PaperEvidence(level: EvidenceLevel.abstractOnly)
+          : const PaperEvidence(level: EvidenceLevel.noUsableText);
+      _cacheEvidence(key, result);
+      return result;
+    }
+
+    // 3. Jika sudah ada pekerjaan in-flight untuk paper dan maxChars yang sama, reuse future tersebut
+    final inflight = _inflightEvidence[key];
+    if (inflight != null) {
+      return await inflight;
+    }
+
+    // 4. Buat future baru dan daftarkan ke registry in-flight
+    final future = _doExtractPaperEvidence(paper, maxChars: maxChars);
+    _inflightEvidence[key] = future;
+
+    try {
+      final result = await future;
+      // HANYA simpan ke cache jika ekstraksi full text berhasil.
+      // Transient failures (network timeout, socket error, non-200) menghasilkan
+      // fallback untuk pemanggil saat ini, tetapi TIDAK di-cache agar retry diizinkan.
+      if (result.level == EvidenceLevel.fullText) {
+        _cacheEvidence(key, result);
+      }
+      return result;
+    } finally {
+      // Pastikan hanya Future yang masih identik yang dihapus dari registry
+      if (identical(_inflightEvidence[key], future)) {
+        _inflightEvidence.remove(key);
+      }
+    }
+  }
+
+  Future<PaperEvidence> _doExtractPaperEvidence(
+    ArxivPaper paper, {
+    required int maxChars,
+  }) async {
+    try {
+      String? text;
+      if (paper.pdfUrl.startsWith('file://')) {
+        final file = dart_io.File(paper.pdfUrl.replaceFirst('file://', ''));
+        final bytes = await file.readAsBytes();
+        text = await _pdf.extractTextFromBytes(bytes, maxChars: maxChars);
+      } else {
+        text = await _pdf
+            .extractTextFromUrl(paper.pdfUrl, maxChars: maxChars)
+            .timeout(const Duration(seconds: 20));
+      }
+
+      if (isTextUsable(text)) {
+        final chunks = PdfChunker.chunkText(text);
+        return PaperEvidence(
+          level: EvidenceLevel.fullText,
+          extractedText: text,
+          chunks: chunks,
+        );
+      } else {
+        if (isAbstractValid(paper.summary)) {
+          return const PaperEvidence(level: EvidenceLevel.abstractOnly);
+        } else {
+          return const PaperEvidence(level: EvidenceLevel.noUsableText);
+        }
+      }
+    } catch (e) {
+      debugPrint(
+          '[EVIDENCE_DEBUG] Evidence retrieval failed for ${paper.id}: $e');
+      if (isAbstractValid(paper.summary)) {
+        return const PaperEvidence(level: EvidenceLevel.abstractOnly);
+      } else {
+        return const PaperEvidence(level: EvidenceLevel.noUsableText);
+      }
+    }
+  }
+
+  /// Membangun prompt Tanya Paper untuk satu paper aktif menggunakan retrieval konteks lokal berbasis relevansi pertanyaan.
+  @visibleForTesting
+  static String buildSinglePaperContextPrompt({
+    required ArxivPaper paper,
+    required PaperEvidence? evidence,
+    required String userQuery,
+  }) {
+    final buffer = StringBuffer();
+    buffer.writeln('Konteks Makalah: ${paper.title}');
+    buffer.writeln('ID: ${paper.id}');
+    if (paper.doi != null && paper.doi!.trim().isNotEmpty) {
+      buffer.writeln('DOI: ${paper.doi!.trim()}');
+    }
+
+    final hasValidAbstract = checkAbstractValid(paper.summary);
+    if (hasValidAbstract) {
+      buffer.writeln('Abstrak (Jangkar Konteks):');
+      buffer.writeln(paper.summary.trim());
+      buffer.writeln();
+    }
+
+    if (evidence == null || evidence.level == EvidenceLevel.loading) {
+      buffer.writeln('Status Bukti: Ekstraksi teks PDF belum selesai.');
+      buffer.writeln(
+          'Perhatian: Jawab hanya berdasarkan abstrak jika tersedia, jangan berspekulasi mengenai isi dokumen.');
+      buffer.writeln();
+      buffer.writeln('Pertanyaan: $userQuery');
+      return buffer.toString();
+    }
+
+    if (evidence.level == EvidenceLevel.noUsableText) {
+      buffer.writeln(
+          'Status Bukti: Tidak ada teks yang dapat digunakan (No Usable Text).');
+      buffer.writeln(
+          'Peringatan: Dokumen tidak memiliki teks maupun abstrak yang valid. Jangan membuat klaim substantif mengenai isi paper ini.');
+      buffer.writeln();
+      buffer.writeln('Pertanyaan: $userQuery');
+      return buffer.toString();
+    }
+
+    if (evidence.level == EvidenceLevel.abstractOnly) {
+      buffer.writeln(
+          'Status Bukti: Hanya Abstrak (Teks lengkap PDF tidak tersedia atau gagal diekstrak).');
+      buffer.writeln(
+          'Peringatan: Batasi jawaban Anda HANYA pada informasi yang tercantum dalam abstrak di atas. JANGAN membuat klaim substantif mengenai metodologi, hasil eksperimen, atau detail yang tidak ada dalam abstrak.');
+      buffer.writeln();
+      buffer.writeln('Pertanyaan: $userQuery');
+      return buffer.toString();
+    }
+
+    // EvidenceLevel.fullText
+    final chunks = evidence.chunks.isNotEmpty
+        ? evidence.chunks
+        : (evidence.extractedText != null &&
+                evidence.extractedText!.trim().isNotEmpty
+            ? PdfChunker.chunkText(evidence.extractedText!)
+            : const <PdfChunk>[]);
+
+    if (chunks.isEmpty) {
+      buffer.writeln(
+          'Status Bukti: Full Text Tersedia (Tidak dapat dipecah menjadi chunk).');
+      if (evidence.extractedText != null &&
+          evidence.extractedText!.trim().isNotEmpty) {
+        buffer.writeln('Isi Teks PDF (sebagian):');
+        buffer.writeln(evidence.extractedText);
+        buffer.writeln();
+      }
+      buffer.writeln('Pertanyaan: $userQuery');
+      return buffer.toString();
+    }
+
+    final retrieval = LexicalRetriever.retrieve(
+      chunks: chunks,
+      query: userQuery,
+      maxChunks: 3,
+      maxChars: 5000,
+    );
+
+    if (!retrieval.isFallback && retrieval.scoredChunks.isNotEmpty) {
+      buffer.writeln(
+          'Status Bukti: Ditemukan ${retrieval.scoredChunks.length} bagian relevan melalui pencarian leksikal:');
+      for (final sc in retrieval.scoredChunks) {
+        final pNum = sc.chunk.pageNumber != PdfChunk.kUnknownPage
+            ? ', Halaman: ${sc.chunk.pageNumber}'
+            : '';
+        buffer.writeln('[Bagian: ${sc.chunk.sectionTitle}$pNum]');
+        buffer.writeln(sc.chunk.text);
+        buffer.writeln();
+      }
+    } else if (retrieval.fallbackReason == FallbackReason.noMatches) {
+      buffer.writeln(
+          'Status Bukti: Tidak ditemukan kutipan spesifik dalam dokumen yang cocok dengan kata kunci pertanyaan.');
+      buffer.writeln(
+          'Peringatan: Jangan mengarang bukti atau klaim yang tidak ada dalam teks. Gunakan abstrak di atas sebagai acuan umum, dan nyatakan bahwa rincian spesifik tidak ditemukan dalam dokumen.');
+      buffer.writeln();
+    } else {
+      // emptyQuery / stopwordsOnly
+      buffer.writeln(
+          'Status Bukti: Pertanyaan umum / eksplorasi umum (tidak ada kata kunci spesifik).');
+      buffer.writeln('Bagian Awal Dokumen (Konteks Umum):');
+      final initialChunk = chunks.first;
+      buffer.writeln('[Bagian: ${initialChunk.sectionTitle}]');
+      buffer.writeln(initialChunk.text);
+      buffer.writeln();
+    }
+
+    buffer.writeln('Pertanyaan: $userQuery');
+    return buffer.toString();
+  }
+
+  /// Membangun prompt Tanya Paper untuk multi-makalah aktif menggunakan retrieval konteks independen per paper.
+  @visibleForTesting
+  static String buildMultiPaperContextPrompt({
+    required List<ArxivPaper> papers,
+    required Map<String, PaperEvidence> evidenceMap,
+    required String userQuery,
+  }) {
+    final buffer = StringBuffer();
+    buffer.writeln('Konteks Makalah (Multi-Paper Research Context):\n');
+    buffer.writeln('INSTRUKSI SINTESIS MULTI-PAPER:');
+    buffer.writeln(
+        '- Gunakan penanda sumber yang konsisten: [1], [2], [3], sesuai urutan paper di bawah ini.');
+    buffer.writeln(
+        '- CITATION INTEGRITY: WAJIB sertakan sitasi (misal [1]) HANYA jika klaim tersebut terbukti ada dalam teks evidence paper [1].');
+    buffer.writeln(
+        '- JANGAN memberikan sitasi kosong. Jika klaim merupakan asumsi eksternal Anda atau tidak ada di evidence, JANGAN pasang tag sitasi [1].');
+    buffer.writeln(
+        '- Jika evidence tidak memadai untuk menjawab secara substantif, nyatakan keterbatasan tersebut secara jujur.');
+    buffer.writeln(
+        '- Bedakan fakta dari tiap paper dan interpretasi lintas-paper secara eksplisit.');
+    buffer.writeln('- JANGAN mengklaim membaca bagian dokumen yang tidak tersedia.');
+    buffer.writeln(
+        '- JANGAN menyimpulkan metode, hasil, angka, atau kontribusi yang tidak didukung oleh evidence (teks atau abstrak yang diberikan).');
+    buffer.writeln(
+        '- Jika hanya abstrak yang tersedia, batasi klaim Anda HANYA sesuai isi abstrak tersebut.');
+    buffer.writeln(
+        '- Jangan menganggap kesamaan topik sebagai bukti bahwa dua paper memiliki hubungan metodologis langsung.\n');
+    buffer.writeln('EVIDENCE (Data Makalah):\n');
+
+    for (int i = 0; i < papers.length; i++) {
+      final p = papers[i];
+      final evidence = evidenceMap[p.id];
+      final paperNum = i + 1;
+
+      buffer.writeln('Makalah [$paperNum]:');
+      buffer.writeln('Judul: ${p.title}');
+      buffer.writeln('ID: ${p.id}');
+
+      if (evidence == null || evidence.level == EvidenceLevel.loading) {
+        buffer.writeln('Status Evidence: Belum selesai diekstrak');
+        if (checkAbstractValid(p.summary)) {
+          buffer.writeln('Abstrak: ${p.summary.trim()}');
+        }
+        buffer.writeln();
+        continue;
+      }
+
+      if (evidence.level == EvidenceLevel.noUsableText) {
+        buffer.writeln(
+            'Status Evidence: Tidak ada teks yang dapat digunakan (No Usable Text)');
+        buffer.writeln(
+            'Peringatan: Jangan membuat klaim substantif mengenai isi paper ini.');
+        buffer.writeln();
+        continue;
+      }
+
+      if (evidence.level == EvidenceLevel.abstractOnly) {
+        buffer.writeln(
+            'Status Evidence: Hanya Abstrak (Full Text gagal/tidak tersedia)');
+        if (checkAbstractValid(p.summary)) {
+          buffer.writeln('Abstrak: ${p.summary.trim()}');
+        }
+        buffer.writeln();
+        continue;
+      }
+
+      // EvidenceLevel.fullText
+      final chunks = evidence.chunks.isNotEmpty
+          ? evidence.chunks
+          : (evidence.extractedText != null &&
+                  evidence.extractedText!.trim().isNotEmpty
+              ? PdfChunker.chunkText(evidence.extractedText!)
+              : const <PdfChunk>[]);
+
+      if (chunks.isEmpty) {
+        buffer.writeln('Status Evidence: Full Text Tersedia (Tidak ada chunk)');
+        if (evidence.extractedText != null) {
+          final clipped =
+              evidence.extractedText!.length > kMultiPaperPerPaperMaxChars
+                  ? evidence.extractedText!.substring(0, kMultiPaperPerPaperMaxChars)
+                  : evidence.extractedText!;
+          buffer.writeln('Isi Teks PDF (sebagian):\n$clipped');
+        }
+        buffer.writeln();
+        continue;
+      }
+
+      // Retrieval independen per paper menggunakan userQuery
+      final retrieval = LexicalRetriever.retrieve(
+        chunks: chunks,
+        query: userQuery,
+        maxChunks: 2,
+        maxChars: 3500,
+      );
+
+      if (checkAbstractValid(p.summary)) {
+        buffer.writeln('Abstrak: ${p.summary.trim()}');
+      }
+
+      if (!retrieval.isFallback && retrieval.scoredChunks.isNotEmpty) {
+        buffer.writeln(
+            'Status Evidence: Full Text Tersedia (${retrieval.scoredChunks.length} bagian relevan cocok):');
+        for (final sc in retrieval.scoredChunks) {
+          final pNum = sc.chunk.pageNumber != PdfChunk.kUnknownPage
+              ? ', Hal: ${sc.chunk.pageNumber}'
+              : '';
+          buffer.writeln('[[${sc.chunk.sectionTitle}$pNum]]');
+          buffer.writeln(sc.chunk.text);
+        }
+      } else if (retrieval.fallbackReason == FallbackReason.noMatches) {
+        buffer.writeln(
+            'Status Evidence: Full Text Tersedia (Tidak ditemukan bukti leksikal spesifik yang cocok)');
+        buffer.writeln(
+            'Catatan: Gunakan abstrak di atas sebagai acuan umum paper ini.');
+      } else {
+        // emptyQuery / stopwordsOnly
+        buffer.writeln('Status Evidence: Full Text Tersedia (Konteks Umum)');
+        final firstChunk = chunks.first;
+        buffer.writeln('[[${firstChunk.sectionTitle}]]');
+        buffer.writeln(firstChunk.text);
+      }
+      buffer.writeln();
+    }
+
+    buffer.writeln('Pertanyaan Pengguna: $userQuery');
+
+    final fullPrompt = buffer.toString();
+    if (fullPrompt.length > kMultiPaperTotalMaxChars) {
+      return fullPrompt.substring(0, kMultiPaperTotalMaxChars);
+    }
+    return fullPrompt;
   }
 
   /// Resolves which specific paper is referenced by an ordinal or positional reference
@@ -408,6 +854,90 @@ class SciChatProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Memperbarui daftar makalah kiriman terbaru (latest submissions) di arXiv bidang AI & CS.
+  Future<void> refreshTrending() => _fetchTrending();
+
+  /// Memuat literatur riset untuk topik tertentu di halaman Jelajah Riset.
+  /// Dilengkapi pengaman urutan kueri (_exploreRequestId) untuk mencegah race condition.
+  Future<void> loadExploreTopic(String topicId, {SearchService? customSearch}) async {
+    final topic = kDefaultExploreTopics.firstWhere(
+      (t) => t.id == topicId,
+      orElse: () => kDefaultExploreTopics.first,
+    );
+
+    final currentRequestId = ++_exploreRequestId;
+    _selectedExploreTopicId = topic.id;
+    _exploreSearchQuery = '';
+    _isLoadingExplore = true;
+    _exploreError = null;
+    notifyListeners();
+
+    try {
+      final s = customSearch ?? _search;
+      final results = await s.search(
+        query: 'cat:${topic.arxivCategory}',
+        keywords: topic.plainKeywords,
+        filter: const SearchFilter(maxResults: 20, sortBy: 'submittedDate'),
+        deep: false,
+      );
+
+      if (currentRequestId != _exploreRequestId) return;
+
+      _explorePapers = results;
+      _isLoadingExplore = false;
+      notifyListeners();
+    } catch (e) {
+      if (currentRequestId != _exploreRequestId) return;
+      _exploreError = e.toString();
+      _isLoadingExplore = false;
+      notifyListeners();
+    }
+  }
+
+  /// Menjalankan pencarian teks bebas di halaman Jelajah Riset.
+  Future<void> searchExplore(String query, {SearchService? customSearch}) async {
+    final q = query.trim();
+    if (q.isEmpty) return;
+
+    final currentRequestId = ++_exploreRequestId;
+    _selectedExploreTopicId = '';
+    _exploreSearchQuery = q;
+    _isLoadingExplore = true;
+    _exploreError = null;
+    notifyListeners();
+
+    try {
+      final s = customSearch ?? _search;
+      final results = await s.search(
+        query: q,
+        filter: const SearchFilter(maxResults: 20, sortBy: 'relevance'),
+        deep: false,
+      );
+
+      if (currentRequestId != _exploreRequestId) return;
+
+      _explorePapers = results;
+      _isLoadingExplore = false;
+      notifyListeners();
+    } catch (e) {
+      if (currentRequestId != _exploreRequestId) return;
+      _exploreError = e.toString();
+      _isLoadingExplore = false;
+      notifyListeners();
+    }
+  }
+
+  /// Memuat ulang halaman Jelajah Riset (untuk Pull-to-Refresh atau tombol Retry).
+  Future<void> refreshExplore({SearchService? customSearch}) async {
+    if (_selectedExploreTopicId.isNotEmpty) {
+      await loadExploreTopic(_selectedExploreTopicId, customSearch: customSearch);
+    } else if (_exploreSearchQuery.isNotEmpty) {
+      await searchExplore(_exploreSearchQuery, customSearch: customSearch);
+    } else {
+      await loadExploreTopic('cs.AI', customSearch: customSearch);
+    }
+  }
+
   Future<void> setThemeMode(ThemeMode mode) async {
     _themeMode = mode;
     notifyListeners();
@@ -474,10 +1004,52 @@ class SciChatProvider extends ChangeNotifier {
       savedAt: DateTime.now(),
     );
 
-    await _storage.addNote(note);
-    _notes.add(note);
-    notifyListeners();
-    return true;
+    try {
+      final success = await _storage.addNote(note);
+      if (!success) return false;
+
+      _notes.add(note);
+      notifyListeners();
+      return true;
+    } catch (e) {
+      debugPrint('[STORAGE_ERROR] Failed to save insight note: $e');
+      return false;
+    }
+  }
+
+  /// Menyimpan ringkasan AI mandiri dari halaman Paper Detail ke dalam Catatan Riset.
+  Future<bool> savePaperSummary({
+    required ArxivPaper paper,
+    required String summary,
+  }) async {
+    final cleanSummary = FollowUpParser.parse(summary).cleanContent.trim();
+    if (paper.id.trim().isEmpty ||
+        cleanSummary.isEmpty ||
+        cleanSummary.startsWith('Failed to summarize:')) {
+      return false;
+    }
+
+    if (isPaperSummarySaved(paper.id)) return false;
+
+    final note = ResearchNote(
+      id: const Uuid().v4(),
+      sourceMessageId: '',
+      content: cleanSummary,
+      sources: [paper],
+      savedAt: DateTime.now(),
+    );
+
+    try {
+      final success = await _storage.addNote(note);
+      if (!success) return false;
+
+      _notes.add(note);
+      notifyListeners();
+      return true;
+    } catch (e) {
+      debugPrint('[STORAGE_ERROR] Failed to save paper summary note: $e');
+      return false;
+    }
   }
 
   Future<void> deleteNote(String noteId) async {
@@ -487,7 +1059,17 @@ class SciChatProvider extends ChangeNotifier {
   }
 
   bool isNoteSaved(String messageId) {
+    if (messageId.trim().isEmpty) return false;
     return _notes.any((n) => n.sourceMessageId == messageId);
+  }
+
+  /// Mengecek apakah ringkasan paper dengan ID tertentu sudah tersimpan ke Catatan Riset.
+  bool isPaperSummarySaved(String paperId) {
+    final cleanId = paperId.trim();
+    if (cleanId.isEmpty) return false;
+    return _notes.any((n) =>
+        n.isPaperSummary &&
+        n.sources.any((p) => p.id == cleanId));
   }
 
   void _syncSession() {
@@ -509,11 +1091,30 @@ class SciChatProvider extends ChangeNotifier {
       // Move to top
       final session = _sessions.removeAt(idx);
       _sessions.insert(0, session);
+    } else if (_messages.isNotEmpty) {
+      final originId =
+          _activeSessionId.isNotEmpty ? _activeSessionId : _uuid.v4();
+      _activeSessionId = originId;
+      final firstUserMsg = _messages.firstWhere((m) => m.isUser,
+          orElse: () => _messages.first);
+      final title = firstUserMsg.content.length > 30
+          ? '${firstUserMsg.content.substring(0, 30)}...'
+          : (firstUserMsg.content.isEmpty ? 'New Chat' : firstUserMsg.content);
+      _sessions.insert(
+        0,
+        ChatSession(
+          id: originId,
+          title: title,
+          updatedAt: DateTime.now(),
+          messages: List.from(_messages),
+        ),
+      );
     }
     _storage.saveChatSessions(_sessions);
   }
 
   void createNewSession({bool notify = true}) {
+    _contextGenerationToken++;
     _abortActiveGenerationForSessionSwitch();
     final newSession = ChatSession(
       id: _uuid.v4(),
@@ -532,8 +1133,103 @@ class SciChatProvider extends ChangeNotifier {
     if (notify) notifyListeners();
   }
 
+  bool _isBranching = false;
+
+  /// Branches the current conversation from [messageId] into a new standalone session.
+  /// Copies messages from start up to [messageId] (inclusive) with fresh UUIDs,
+  /// preserving order, content, and paper citations without altering the parent session.
+  Future<bool> branchSessionFromMessage(String messageId) async {
+    if (isLoading || _isBranching) return false;
+    _isBranching = true;
+
+    try {
+      final targetIndex = _messages.indexWhere((m) => m.id == messageId);
+      if (targetIndex < 0) return false;
+
+      final targetMsg = _messages[targetIndex];
+      // Hanya pesan asisten yang sudah selesai atau error parsial dengan konten yang boleh dicabangkan
+      if (!targetMsg.isAssistant) return false;
+      if (targetMsg.status == MessageStatus.sending ||
+          targetMsg.status == MessageStatus.streaming) {
+        return false;
+      }
+      if (targetMsg.content.trim().isEmpty) return false;
+
+      // Pastikan sesi aktif tersinkronisasi terlebih dahulu jika ada perubahan lokal
+      _syncSession();
+
+      // Temukan sesi aktif saat ini
+      final currentSessionIndex =
+          _sessions.indexWhere((s) => s.id == _activeSessionId);
+      final currentTitle = currentSessionIndex != -1
+          ? _sessions[currentSessionIndex].title
+          : 'Percakapan Riset';
+
+      // Salin pesan dari awal sampai targetIndex (inklusif)
+      final sublistMessages = _messages.sublist(0, targetIndex + 1);
+
+      // Kloning setiap pesan dengan UUID baru
+      final clonedMessages = sublistMessages.map((msg) {
+        return ChatMessage(
+          id: _uuid.v4(),
+          role: msg.role,
+          content: msg.content,
+          timestamp: msg.timestamp,
+          status: msg.status == MessageStatus.sending ||
+                  msg.status == MessageStatus.streaming
+              ? MessageStatus.done
+              : msg.status,
+          papers: List<ArxivPaper>.from(msg.papers),
+          attachmentName: msg.attachmentName,
+          followUpSuggestions: List<String>.from(msg.followUpSuggestions),
+          errorType: msg.errorType,
+          isTruncated: msg.isTruncated,
+          finishReason: msg.finishReason,
+        );
+      }).toList();
+
+      final newSessionId = _uuid.v4();
+      final branchTitle = currentTitle.startsWith('Cabang: ')
+          ? currentTitle
+          : 'Cabang: $currentTitle';
+
+      final newSession = ChatSession(
+        id: newSessionId,
+        title: branchTitle,
+        updatedAt: DateTime.now(),
+        messages: clonedMessages,
+      );
+
+      // Pastikan sesi baru tersimpan sebelum mutasi state aktif
+      final updatedSessions = [newSession, ..._sessions];
+      try {
+        await _storage.saveChatSessions(updatedSessions);
+      } catch (storageError) {
+        debugPrint(
+            '[AI_DEBUG] Gagal menyimpan sesi cabang ke storage: $storageError');
+        return false;
+      }
+
+      // Berhasil disimpan, alihkan sesi aktif
+      _sessions = updatedSessions;
+      _activeSessionId = newSessionId;
+      _contextGenerationToken++;
+      _messages = List.from(clonedMessages);
+      _lastSearchResults = [];
+      _activeContexts = [];
+      _contextEvidence.clear();
+      _pendingAttachment = null;
+
+      notifyListeners();
+      return true;
+    } finally {
+      _isBranching = false;
+    }
+  }
+
   void loadSession(String id) {
     if (_activeSessionId == id) return;
+    _contextGenerationToken++;
     _abortActiveGenerationForSessionSwitch();
     final session =
         _sessions.firstWhere((s) => s.id == id, orElse: () => _sessions.first);
@@ -547,6 +1243,7 @@ class SciChatProvider extends ChangeNotifier {
   }
 
   void deleteSession(String id) {
+    _contextGenerationToken++;
     if (_activeSessionId == id) {
       _abortActiveGenerationForSessionSwitch(saveOutgoing: false);
     }
@@ -591,6 +1288,7 @@ class SciChatProvider extends ChangeNotifier {
     }
 
     if (_pendingAttachment != null) {
+      _contextGenerationToken++;
       _activeContexts = [_pendingAttachment!];
       _retrieveEvidence(_activeContexts);
       _pendingAttachment = null;
@@ -823,36 +1521,19 @@ class SciChatProvider extends ChangeNotifier {
         _setStatus(AppState.thinking, 'AI sedang memproses permintaan...');
       }
 
-      String? pdfText;
       if (_activeContexts.isNotEmpty) {
-        if (_activeContexts.length == 1) {
-          final paperContext = _activeContexts.first;
+        for (final paperContext in _activeContexts) {
           final evidence = _contextEvidence[paperContext.id];
-
-          if (evidence != null && evidence.level == EvidenceLevel.fullText) {
-            _setStatus(AppState.thinking, 'Menyiapkan teks makalah...');
-            pdfText = evidence.extractedText;
-          } else if (paperContext.pdfUrl.isNotEmpty) {
+          if ((evidence == null || evidence.level == EvidenceLevel.loading) &&
+              paperContext.pdfUrl.isNotEmpty) {
             _setStatus(
                 AppState.thinking, 'Mengekstrak teks dokumen terlampir...');
-            if (paperContext.pdfUrl.startsWith('file://')) {
-              try {
-                final file = dart_io.File(
-                    paperContext.pdfUrl.replaceFirst('file://', ''));
-                final bytes = await file.readAsBytes();
-                final extracted = await _pdf.extractTextFromBytes(bytes);
-                if (isTextUsable(extracted)) {
-                  pdfText = extracted;
-                }
-              } catch (e) {
-                debugPrint('[CHAT_DEBUG] Failed to read local PDF: $e');
-              }
-            } else {
-              final extracted =
-                  await _pdf.extractTextFromUrl(paperContext.pdfUrl);
-              if (isTextUsable(extracted)) {
-                pdfText = extracted;
-              }
+            final fetched = await _fetchPaperEvidence(
+              paperContext,
+              maxChars: kChatEvidenceMaxChars,
+            );
+            if (_activeContexts.any((p) => p.id == paperContext.id)) {
+              _contextEvidence[paperContext.id] = fetched;
             }
           }
         }
@@ -878,65 +1559,17 @@ class SciChatProvider extends ChangeNotifier {
       String fullUserMsg = text;
       if (_activeContexts.isNotEmpty) {
         if (_activeContexts.length == 1) {
-          fullUserMsg = 'Konteks Makalah: ${_activeContexts.first.title}\n';
-          if (pdfText != null) {
-            fullUserMsg += 'Isi Teks PDF (sebagian): \n$pdfText\n\n';
-          }
-          fullUserMsg += 'Pertanyaan: $text';
+          fullUserMsg = buildSinglePaperContextPrompt(
+            paper: _activeContexts.first,
+            evidence: _contextEvidence[_activeContexts.first.id],
+            userQuery: text,
+          );
         } else {
-          fullUserMsg = 'Konteks Makalah (Multi-Paper Research Context):\n\n';
-          fullUserMsg += 'INSTRUKSI SINTESIS MULTI-PAPER:\n';
-          fullUserMsg +=
-              '- Gunakan penanda sumber yang konsisten: [1], [2], [3], sesuai urutan paper di bawah ini.\n';
-          fullUserMsg +=
-              '- CITATION INTEGRITY: WAJIB sertakan sitasi (misal [1]) HANYA jika klaim tersebut terbukti ada dalam teks evidence paper [1].\n';
-          fullUserMsg +=
-              '- JANGAN memberikan sitasi kosong. Jika klaim merupakan asumsi eksternal Anda atau tidak ada di evidence, JANGAN pasang tag sitasi [1].\n';
-          fullUserMsg +=
-              '- Jika evidence tidak memadai untuk menjawab secara substantif, nyatakan keterbatasan tersebut secara jujur.\n';
-          fullUserMsg +=
-              '- Bedakan fakta dari tiap paper dan interpretasi lintas-paper secara eksplisit.\n';
-          fullUserMsg +=
-              '- JANGAN mengklaim membaca bagian dokumen yang tidak tersedia.\n';
-          fullUserMsg +=
-              '- JANGAN menyimpulkan metode, hasil, angka, atau kontribusi yang tidak didukung oleh evidence (teks atau abstrak yang diberikan).\n';
-          fullUserMsg +=
-              '- Jika hanya abstrak yang tersedia, batasi klaim Anda HANYA sesuai isi abstrak tersebut.\n';
-          fullUserMsg +=
-              '- Jangan menganggap kesamaan topik sebagai bukti bahwa dua paper memiliki hubungan metodologis langsung.\n\n';
-          fullUserMsg += 'EVIDENCE (Data Makalah):\n';
-
-          for (int i = 0; i < _activeContexts.length; i++) {
-            final p = _activeContexts[i];
-            final evidence = _contextEvidence[p.id];
-
-            fullUserMsg += 'Makalah [${i + 1}]:\n';
-            fullUserMsg += 'Judul: ${p.title}\n';
-            fullUserMsg += 'ID: ${p.id}\n';
-
-            if (evidence == null || evidence.level == EvidenceLevel.loading) {
-              fullUserMsg += 'Status Evidence: Belum selesai diekstrak\n';
-              if (isAbstractValid(p.summary)) {
-                fullUserMsg += 'Abstrak: ${p.summary}\n\n';
-              } else {
-                fullUserMsg += '\n';
-              }
-            } else if (evidence.level == EvidenceLevel.fullText) {
-              fullUserMsg += 'Status Evidence: Full Text Tersedia\n';
-              fullUserMsg +=
-                  'Isi Teks PDF (sebagian): \n${evidence.extractedText}\n\n';
-            } else if (evidence.level == EvidenceLevel.abstractOnly) {
-              fullUserMsg +=
-                  'Status Evidence: Hanya Abstrak (Full Text gagal/tidak tersedia)\n';
-              fullUserMsg += 'Abstrak: ${p.summary}\n\n';
-            } else {
-              fullUserMsg +=
-                  'Status Evidence: Tidak ada teks yang dapat digunakan (No Usable Text)\n';
-              fullUserMsg +=
-                  'Peringatan: Jangan membuat klaim substantif mengenai isi paper ini.\n\n';
-            }
-          }
-          fullUserMsg += 'Pertanyaan Pengguna: $text';
+          fullUserMsg = buildMultiPaperContextPrompt(
+            papers: _activeContexts,
+            evidenceMap: _contextEvidence,
+            userQuery: text,
+          );
         }
       }
       if (searchStatusNotice != null &&
@@ -1226,6 +1859,259 @@ class SciChatProvider extends ChangeNotifier {
       return ChatErrorType.connection;
     }
     return ChatErrorType.unknown;
+  }
+
+  /// Regenerates the last assistant response without duplicating the user's prompt
+  /// and preserves existing paper citations/metadata without re-querying search APIs.
+  Future<void> regenerateLastResponse({String? assistantMessageId}) async {
+    if (isLoading || !_apiKeySet) return;
+
+    final assistantIndex = assistantMessageId != null
+        ? _messages.indexWhere((m) => m.id == assistantMessageId)
+        : _messages.length - 1;
+
+    if (assistantIndex < 1 || assistantIndex != _messages.length - 1) return;
+
+    final oldAssistantMsg = _messages[assistantIndex];
+    if (!oldAssistantMsg.isAssistant) return;
+
+    final userMsg = _messages[assistantIndex - 1];
+    if (!userMsg.isUser) return;
+
+    final targetSessionId = _activeSessionId;
+    final genToken = ++_activeGenerationToken;
+    _isCancelled = false;
+
+    final papers = oldAssistantMsg.papers;
+    final assistantId = _uuid.v4();
+
+    final thinkingMsg = ChatMessage(
+      id: assistantId,
+      role: MessageRole.assistant,
+      content: '',
+      timestamp: DateTime.now(),
+      status: MessageStatus.sending,
+      papers: papers,
+    );
+
+    // In-place replace pesan asisten terakhir
+    _messages = [
+      ..._messages.sublist(0, assistantIndex),
+      thinkingMsg,
+    ];
+    _setStatus(AppState.thinking, 'Menyusun ulang jawaban...');
+
+    // Ambil riwayat chat sebelum giliran ini yang berstatus done
+    final chatHistory = _messages
+        .where((m) =>
+            m.status == MessageStatus.done &&
+            m.id != assistantId &&
+            m.id != oldAssistantMsg.id &&
+            m.id != userMsg.id)
+        .toList();
+
+    String streamedContent = '';
+    bool receivedFirstChunk = false;
+    DateTime lastNotifyTime = DateTime.now();
+    const throttleDuration = Duration(milliseconds: 100);
+
+    try {
+      final stream = _gemini.chatStream(
+        history: chatHistory,
+        userMessage: userMsg.content,
+        papers: papers,
+        fullTexts: const {},
+        eli5Mode: _eli5Mode,
+        skill: _activeSkill,
+      );
+
+      await for (final chunk in stream) {
+        if (_isCancelled ||
+            _activeSessionId != targetSessionId ||
+            _activeGenerationToken != genToken) {
+          debugPrint(
+              '[AI_DEBUG] Regenerate stream dibatalkan atau sesi berganti');
+          break;
+        }
+
+        final isFirst = !receivedFirstChunk;
+        if (isFirst) {
+          receivedFirstChunk = true;
+          _appState = AppState.streaming;
+          _statusText = null;
+        }
+        streamedContent += chunk;
+
+        final now = DateTime.now();
+        if (isFirst || now.difference(lastNotifyTime) >= throttleDuration) {
+          lastNotifyTime = now;
+          if (_activeSessionId != targetSessionId ||
+              _activeGenerationToken != genToken) {
+            break;
+          }
+          final safeDisplayContent =
+              FollowUpParser.maskForStreaming(streamedContent);
+          final partialMsg = thinkingMsg.copyWith(
+            content: safeDisplayContent,
+            status: MessageStatus.streaming,
+            papers: papers,
+          );
+          _messages = _messages
+              .map((m) => m.id == assistantId ? partialMsg : m)
+              .toList();
+          notifyListeners();
+        }
+      }
+
+      if (_activeSessionId != targetSessionId ||
+          _activeGenerationToken != genToken) {
+        debugPrint(
+            '[AI_DEBUG] Mengabaikan penyelesaian regenerate dari sesi lama/tidak aktif');
+        return;
+      }
+
+      if (_isCancelled) {
+        _isCancelled = false;
+        if (_activeSessionId != targetSessionId ||
+            _activeGenerationToken != genToken) {
+          return;
+        }
+        final cleanCancelled =
+            FollowUpParser.parse(streamedContent).cleanContent.trimRight();
+        if (cleanCancelled.trim().isNotEmpty) {
+          final cancelledMsg = thinkingMsg.copyWith(
+            content: cleanCancelled,
+            status: MessageStatus.done,
+            papers: papers,
+            isTruncated: true,
+            finishReason: 'cancelled',
+          );
+          _messages = _messages
+              .map((m) => m.id == assistantId ? cancelledMsg : m)
+              .toList();
+        } else {
+          // Pulihkan respons lama jika pembatalan terjadi sebelum chunk pertama
+          _messages = _messages
+              .map((m) => m.id == assistantId ? oldAssistantMsg : m)
+              .toList();
+        }
+        _appState = AppState.ready;
+        _statusText = null;
+        _syncSession();
+        notifyListeners();
+        return;
+      }
+
+      if (streamedContent.trim().isEmpty) {
+        debugPrint(
+            '[AI_DEBUG] Regenerate stream selesai tanpa teks, memicu fallback monolitik');
+        throw Exception('Stream kosong tanpa konten');
+      }
+
+      final finishReason = _gemini.lastStreamFinishReason;
+      final isTruncated = finishReason == 'length';
+      final parseResult = FollowUpParser.parse(streamedContent);
+
+      final doneMsg = thinkingMsg.copyWith(
+        content: parseResult.cleanContent,
+        status: MessageStatus.done,
+        papers: papers,
+        followUpSuggestions: parseResult.suggestions,
+        isTruncated: isTruncated,
+        finishReason: finishReason,
+      );
+      _messages =
+          _messages.map((m) => m.id == assistantId ? doneMsg : m).toList();
+      _appState = AppState.ready;
+      _statusText = null;
+      _syncSession();
+      notifyListeners();
+    } catch (streamError) {
+      if (_activeSessionId != targetSessionId ||
+          _activeGenerationToken != genToken) {
+        debugPrint(
+            '[AI_DEBUG] Mengabaikan error regenerate stream dari sesi lama: $streamError');
+        return;
+      }
+
+      if (!receivedFirstChunk || streamedContent.trim().isEmpty) {
+        debugPrint(
+            '[AI_DEBUG] Regenerate stream gagal ($streamError), memicu fallback monolitik...');
+        _setStatus(
+            AppState.thinking, 'Streaming gagal, mencoba metode alternatif...');
+        try {
+          final response = await _gemini.chat(
+            history: chatHistory,
+            userMessage: userMsg.content,
+            papers: papers,
+            fullTexts: const {},
+            eli5Mode: _eli5Mode,
+            skill: _activeSkill,
+          );
+          if (response.trim().isEmpty) {
+            throw Exception('Respons monolitik juga kosong');
+          }
+          final parseResult = FollowUpParser.parse(response);
+          final doneMsg = thinkingMsg.copyWith(
+            content: parseResult.cleanContent,
+            status: MessageStatus.done,
+            papers: papers,
+            followUpSuggestions: parseResult.suggestions,
+            isTruncated: false,
+            finishReason: 'stop',
+          );
+          _messages =
+              _messages.map((m) => m.id == assistantId ? doneMsg : m).toList();
+          _appState = AppState.ready;
+          _statusText = null;
+          _syncSession();
+          notifyListeners();
+          debugPrint('[AI_DEBUG] Fallback monolitik regenerate berhasil');
+        } catch (fallbackError) {
+          debugPrint(
+              '[AI_DEBUG] Fallback monolitik regenerate gagal: $fallbackError');
+          final errMsg = thinkingMsg.copyWith(
+            content: '',
+            status: MessageStatus.error,
+            papers: papers,
+            errorType: _classifyChatError(fallbackError),
+            isTruncated: false,
+            finishReason: 'error',
+          );
+          _messages =
+              _messages.map((m) => m.id == assistantId ? errMsg : m).toList();
+          _appState = AppState.error;
+          _errorMessage = fallbackError.toString();
+          _statusText = null;
+        }
+      } else {
+        debugPrint(
+            '[AI_DEBUG] Regenerate stream gagal setelah menerima teks parsial: $streamError');
+        final cleanPartial = FollowUpParser.parse(streamedContent).cleanContent;
+        final partialErrMsg = thinkingMsg.copyWith(
+          content: cleanPartial,
+          status: MessageStatus.error,
+          papers: papers,
+          errorType: _classifyChatError(streamError),
+          isTruncated: true,
+          finishReason: 'error',
+        );
+        _messages = _messages
+            .map((m) => m.id == assistantId ? partialErrMsg : m)
+            .toList();
+        _appState = AppState.error;
+        _errorMessage = streamError.toString();
+        _statusText = null;
+      }
+    }
+
+    if (_activeSessionId != targetSessionId ||
+        _activeGenerationToken != genToken) {
+      return;
+    }
+    _statusText = null;
+    _syncSession();
+    notifyListeners();
   }
 
   Future<void> retryMessage(String errorMessageId) async {
@@ -1571,25 +2457,40 @@ class SciChatProvider extends ChangeNotifier {
     return null;
   }
 
+  @visibleForTesting
+  static String buildPaperSummaryPrompt({
+    required ArxivPaper paper,
+    required PaperEvidence? evidence,
+    int maxTotalChars = SummaryContextSelector.kMaxTotalPromptChars,
+  }) =>
+      SummaryContextSelector.buildSummaryPrompt(
+        paper: paper,
+        evidence: evidence,
+        maxPromptChars: maxTotalChars,
+      );
+
   Future<String?> summarizePaper(ArxivPaper paper) async {
     if (!_apiKeySet) return null;
     try {
-      String? pdfText;
-      if (paper.pdfUrl.isNotEmpty) {
-        if (paper.pdfUrl.startsWith('file://')) {
-          try {
-            final file = dart_io.File(paper.pdfUrl.replaceFirst('file://', ''));
-            final bytes = await file.readAsBytes();
-            pdfText = await _pdf.extractTextFromBytes(bytes);
-          } catch (e) {
-            debugPrint(
-                '[SUMMARY_DEBUG] Failed to read local PDF for summary: $e');
-          }
-        } else {
-          pdfText = await _pdf.extractTextFromUrl(paper.pdfUrl);
-        }
-      }
-      return await _gemini.summarizePaper(paper, pdfText: pdfText);
+      // 1. Ekstraksi evidence dengan batas kSummaryEvidenceMaxChars (40.000 karakter)
+      // menggunakan cache LRU dan in-flight deduplication
+      final evidence = await _fetchPaperEvidence(
+        paper,
+        maxChars: kSummaryEvidenceMaxChars,
+      );
+
+      // 2. Susun konteks ringkasan berbasis cakupan dokumen menyeluruh (Document Coverage Oriented)
+      final curatedContext = SummaryContextSelector.buildSummaryContext(
+        paper: paper,
+        evidence: evidence,
+        maxChars: SummaryContextSelector.kMaxSummaryContextChars,
+      );
+
+      final rawSummary = await _gemini.summarizePaper(
+        paper,
+        pdfText: curatedContext,
+      );
+      return FollowUpParser.parse(rawSummary).cleanContent;
     } catch (e) {
       return 'Failed to summarize: $e';
     }

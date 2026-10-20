@@ -157,11 +157,171 @@ String cleanMarkdownForPreview(String text) {
   );
 
   // 14. Normalisasi baris kosong berturut-turut
-  final lines = result
-      .split('\n')
-      .map((l) => l.trim())
-      .where((l) => l.isNotEmpty);
+  final lines =
+      result.split('\n').map((l) => l.trim()).where((l) => l.isNotEmpty);
 
   return lines.join('\n').trim();
 }
 
+/// Perintah dan simbol matematika TeX yang diizinkan untuk normalisasi abstrak konservatif.
+const Set<String> _kMathCommands = {
+  // Greek letters (lowercase)
+  'alpha', 'beta', 'gamma', 'delta', 'epsilon', 'varepsilon', 'zeta', 'eta',
+  'theta', 'vartheta', 'iota', 'kappa', 'lambda', 'mu', 'nu', 'xi',
+  'pi', 'varpi', 'rho', 'varrho', 'sigma', 'varsigma', 'tau', 'upsilon',
+  'phi', 'varphi', 'chi', 'psi', 'omega',
+  // Greek letters (uppercase)
+  'Gamma', 'Delta', 'Theta', 'Lambda', 'Xi', 'Pi', 'Sigma', 'Upsilon',
+  'Phi', 'Psi', 'Omega',
+  // Standard math operators and symbols
+  'nabla', 'partial', 'infty', 'int', 'iint', 'iiint', 'oint', 'sum', 'prod',
+  'coth', 'tanh', 'sinh', 'cosh',
+  'le', 'ge', 'leq', 'geq', 'in', 'notin', 'times', 'div', 'pm', 'mp',
+  'cdot', 'approx', 'equiv', 'sim', 'propto', 'neq', 'ne',
+  'forall', 'exists', 'subset', 'subseteq', 'supset', 'supseteq',
+  'cap', 'cup', 'to', 'rightarrow', 'leftarrow', 'leftrightarrow',
+  'Rightarrow', 'Leftarrow', 'Leftrightarrow', 'mapsto',
+  'sqrt', 'frac', 'cfrac', 'dfrac', 'mathbb', 'mathcal', 'mathbf', 'mathrm',
+};
+
+/// Kata penghubung/prosa umum yang menandai batas akhir ekspresi matematika
+/// agar tidak tertelan ke dalam delimiter rumus.
+final RegExp _kMathStopWords = RegExp(
+  r'^(and|or|where|for|with|in|at|on|by|from|to|if|then|when|which|is|are|as|be|we|can|that|this|these|those|dan|atau|dimana|di|pada|untuk|dengan|oleh|jika|maka|saat|adalah|yaitu|yang)\b',
+  caseSensitive: false,
+);
+
+/// Normalisasi konservatif notasi matematika pada abstrak paper.
+///
+/// Mengubah raw TeX dan display math yang tidak memiliki delimiter lengkap
+/// menjadi format yang dikenali oleh MarkdownBody (MathInlineSyntax & MathBlockSyntax)
+/// tanpa merusak teks biasa, URL, kode, atau identifier snake_case.
+///
+/// Fungsi ini murni (pure function), idempoten (idempotent), dan tidak memutasi input.
+String normalizeAbstractMath(String text) {
+  if (text.isEmpty) return text;
+
+  // Optimasi cepat: jika teks tidak memuat tanda TeX atau eksponen, kembalikan langsung
+  if (!text.contains(r'\') &&
+      !text.contains(r'$$') &&
+      !text.contains(r'$') &&
+      !text.contains('^')) {
+    return text;
+  }
+
+  // 1. Normalisasi display math LaTeX \[ ... \] ke format display $$ ... $$
+  var current = text.replaceAllMapped(
+    RegExp(r'\\\[([\s\S]+?)\\\]'),
+    (m) => '\n\n\$\$\n${m[1]!.trim()}\n\$\$\n\n',
+  );
+
+  // 2. Mekanisme Shielding untuk melindungi bagian yang sudah valid
+  final shields = <String>[];
+  String shield(String content) {
+    final placeholder = '\uE000SCICHAT_MATH_${shields.length}\uE001';
+    shields.add(content);
+    return placeholder;
+  }
+
+  // Lindungi URL
+  current = current.replaceAllMapped(
+    RegExp(r'https?:\/\/[^\s)<>]+'),
+    (m) => shield(m[0]!),
+  );
+
+  // Lindungi code block
+  current = current.replaceAllMapped(
+    RegExp(r'```[\s\S]*?```'),
+    (m) => shield(m[0]!),
+  );
+
+  // Lindungi inline code
+  current = current.replaceAllMapped(
+    RegExp(r'`[^`\n]+`'),
+    (m) => shield(m[0]!),
+  );
+
+  // Lindungi display math $$...$$
+  current = current.replaceAllMapped(
+    RegExp(r'\$\$[\s\S]*?\$\$'),
+    (m) => shield(m[0]!),
+  );
+
+  // Lindungi inline math \(...\)
+  current = current.replaceAllMapped(
+    RegExp(r'\\\([\s\S]+?\\\)'),
+    (m) => shield(m[0]!),
+  );
+
+  // Lindungi inline math $...$
+  current = current.replaceAllMapped(
+    RegExp(r'(?<!\\)\$(?!\$)[^\$\n]+?(?<!\\)\$(?!\d)'),
+    (m) => shield(m[0]!),
+  );
+
+  // 3. Normalisasi notasi dimensional (R^d, \mathbb{R}^d, dsb.)
+  current = current.replaceAllMapped(
+    RegExp(r'\\mathbb\{([A-Z])\}\^([a-zA-Z0-9]+|\{[^{}]+\})'),
+    (m) => shield('\$\\mathbb{${m[1]}}^${m[2]}\$'),
+  );
+
+  current = current.replaceAllMapped(
+    RegExp(
+        r'(?<=^|[\s(\[,;])([RCZN])\^([a-zA-Z0-9]+|\{[^{}]+\})(?=[\s)\],;.:!?]|$)'),
+    (m) => shield('\$${m[1]}^${m[2]}\$'),
+  );
+
+  // 4. Kasus spesifik audit: \lambda coth \lambda t atau \lambda \coth \lambda t
+  current = current.replaceAllMapped(
+    RegExp(
+        r'(?<=^|[\s(\[,;])(\\([a-zA-Z]+)(?:\([a-zA-Z0-9,\s+-]+\))?\s+(?:\\?coth)\s+\\([a-zA-Z]+)(?:\([a-zA-Z0-9,\s+-]+\))?\s*[a-zA-Z0-9]*)(?=[\s)\],;.:!?]|$)'),
+    (m) {
+      final cmd1 = m[2]!;
+      final cmd2 = m[3]!;
+      if (_kMathCommands.contains(cmd1) && _kMathCommands.contains(cmd2)) {
+        var raw = m[1]!.trim();
+        raw = raw.replaceAll(RegExp(r'(?<!\\)coth\b'), r'\coth');
+        return shield('\$$raw\$');
+      }
+      return m[0]!;
+    },
+  );
+
+  // 5. Persamaan / Relasi yang diawali perintah matematika TeX (mis. \lambda(t) = \alpha/t, \alpha > 0)
+  current = current.replaceAllMapped(
+    RegExp(
+        r'(?<=^|[\s(\[,;])(\\([a-zA-Z]+)(?:_[a-zA-Z0-9]|_\{[^{}]+\}|\^[a-zA-Z0-9]|\^\{[^{}]+\})*(?:\([a-zA-Z0-9,\s+-]+\))?)\s*(=|\\le|\\ge|\\leq|\\geq|\\approx|\\sim|\\neq|\\ne|<|>)\s*([a-zA-Z0-9\\/^_()+-]+(?:\s*[\/+\-*]\s*[a-zA-Z0-9\\/^_()+-]+)?)(?=[\s)\],;.:!?]|$)'),
+    (m) {
+      final cmd = m[2]!;
+      if (!_kMathCommands.contains(cmd)) return m[0]!;
+      final rhs = m[4]!.trim();
+      if (_kMathStopWords.hasMatch(rhs)) return m[0]!;
+      if (!rhs.contains(r'\') && !RegExp(r'[\/^_=<>+\-*0-9]').hasMatch(rhs)) {
+        if (rhs.length > 2) return m[0]!;
+      }
+      final lhs = m[1]!.trim();
+      final op = m[3]!.trim();
+      return shield('\$$lhs $op $rhs\$');
+    },
+  );
+
+  // 6. Token perintah matematika tunggal (mis. \lambda(t), \alpha, \nabla, \mu)
+  current = current.replaceAllMapped(
+    RegExp(
+        r'(?<=^|[\s(\[,;])(\\([a-zA-Z]+)(?:_[a-zA-Z0-9]|_\{[^{}]+\}|\^[a-zA-Z0-9]|\^\{[^{}]+\})*(?:\([a-zA-Z0-9,\s+-]+\))?)(?=[\s)\],;.:!?]|$)'),
+    (m) {
+      final cmd = m[2]!;
+      if (!_kMathCommands.contains(cmd)) return m[0]!;
+      final token = m[1]!.trim();
+      return shield('\$$token\$');
+    },
+  );
+
+  // 7. Kembalikan seluruh token terlindungi (Unshielding)
+  var result = current;
+  for (int i = 0; i < shields.length; i++) {
+    result = result.replaceAll('SCICHAT_MATH_$i', shields[i]);
+  }
+
+  return result;
+}

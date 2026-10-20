@@ -57,8 +57,9 @@ class MockTestStorageService extends StorageService {
   Future<List<ResearchNote>> getNotes() async => _notes;
 
   @override
-  Future<void> addNote(ResearchNote note) async {
+  Future<bool> addNote(ResearchNote note) async {
     _notes.add(note);
+    return true;
   }
 
   @override
@@ -104,8 +105,10 @@ void main() {
   }
 
   group('SettingsScreen API Key Display & Sync Tests', () {
-    testWidgets('1. Key tetap dimasking secara default (obscureText: true)', (tester) async {
-      final storage = MockTestStorageService(initialKey: 'sk-test1234567890abcdef');
+    testWidgets('1. Key tetap dimasking secara default (obscureText: true)',
+        (tester) async {
+      final storage =
+          MockTestStorageService(initialKey: 'sk-test1234567890abcdef');
       final provider = SciChatProvider(
         storageService: storage,
         geminiService: MockTestGeminiService(),
@@ -123,8 +126,11 @@ void main() {
       expect(textField.controller?.text, equals('sk-test1234567890abcdef'));
     });
 
-    testWidgets('2. Tombol mata menampilkan dan menyembunyikan nilai tanpa mengubah nilainya', (tester) async {
-      final storage = MockTestStorageService(initialKey: 'sk-test1234567890abcdef');
+    testWidgets(
+        '2. Tombol mata menampilkan dan menyembunyikan nilai tanpa mengubah nilainya',
+        (tester) async {
+      final storage =
+          MockTestStorageService(initialKey: 'sk-test1234567890abcdef');
       final provider = SciChatProvider(
         storageService: storage,
         geminiService: MockTestGeminiService(),
@@ -156,7 +162,9 @@ void main() {
       expect(textField.controller?.text, equals('sk-test1234567890abcdef'));
     });
 
-    testWidgets('3. Sinkronisasi asinkron: nilai dari provider.init() yang selesai terlambat langsung tersinkronkan ke controller', (tester) async {
+    testWidgets(
+        '3. Sinkronisasi asinkron: nilai dari provider.init() yang selesai terlambat langsung tersinkronkan ke controller',
+        (tester) async {
       final storage = MockTestStorageService(initialKey: 'sk-async-loaded-key');
       final provider = SciChatProvider(
         storageService: storage,
@@ -180,7 +188,8 @@ void main() {
       expect(textField.controller?.text, equals('sk-async-loaded-key'));
     });
 
-    testWidgets('4. Menyimpan key baru memperbarui provider dan storage', (tester) async {
+    testWidgets('4. Menyimpan key baru memperbarui provider dan storage',
+        (tester) async {
       final storage = MockTestStorageService(initialKey: '');
       final provider = SciChatProvider(
         storageService: storage,
@@ -206,8 +215,11 @@ void main() {
       expect(await storage.getApiKey(), equals('sk-newly-saved-key-999'));
     });
 
-    testWidgets('5. Mengosongkan key dan menyimpan menghapus key dari provider dan storage', (tester) async {
-      final storage = MockTestStorageService(initialKey: 'sk-old-key-to-delete');
+    testWidgets(
+        '5. Mengosongkan key dan menyimpan menghapus key dari provider dan storage',
+        (tester) async {
+      final storage =
+          MockTestStorageService(initialKey: 'sk-old-key-to-delete');
       final provider = SciChatProvider(
         storageService: storage,
         geminiService: MockTestGeminiService(),
@@ -248,7 +260,9 @@ void main() {
       );
     }
 
-    testWidgets('6. Research -> Settings -> tekan tombol kembali di AppBar kembali ke Research tanpa black screen', (tester) async {
+    testWidgets(
+        '6. Research -> Settings -> tekan tombol kembali di AppBar kembali ke Research tanpa black screen',
+        (tester) async {
       final storage = MockTestStorageService(initialKey: 'sk-test-key');
       final session = ChatSession(
         id: 'sess-1',
@@ -297,7 +311,9 @@ void main() {
       expect(provider.messages.length, equals(1));
     });
 
-    testWidgets('7. Research -> Settings -> tekan tombol Back Android kembali ke Research melalui PopScope', (tester) async {
+    testWidgets(
+        '7. Research -> Settings -> tekan tombol Back Android kembali ke Research melalui PopScope',
+        (tester) async {
       final storage = MockTestStorageService(initialKey: 'sk-test-key');
       final session = ChatSession(
         id: 'sess-1',
@@ -339,7 +355,9 @@ void main() {
       expect(provider.messages.length, equals(1));
     });
 
-    testWidgets('8. Ubah tema Terang -> Gelap -> Sistem mempertahankan state percakapan dan navigasi', (tester) async {
+    testWidgets(
+        '8. Ubah tema Terang -> Gelap -> Sistem mempertahankan state percakapan dan navigasi',
+        (tester) async {
       final storage = MockTestStorageService(initialKey: 'sk-test-key');
       final provider = SciChatProvider(
         storageService: storage,
@@ -400,10 +418,13 @@ void main() {
       expect(provider.currentTab, equals(0));
       expect(provider.apiKey, equals('sk-test-key'));
       expect(provider.messages.length, equals(2));
-      expect(provider.messages.first.content, equals('Pertanyaan pengguna tentang dekoherensi'));
+      expect(provider.messages.first.content,
+          equals('Pertanyaan pengguna tentang dekoherensi'));
     });
 
-    testWidgets('9. Berpindah tab berulang kali setelah tema berubah tanpa blank screen atau error', (tester) async {
+    testWidgets(
+        '9. Berpindah tab berulang kali setelah tema berubah tanpa blank screen atau error',
+        (tester) async {
       final storage = MockTestStorageService(initialKey: 'sk-test-key');
       final provider = SciChatProvider(
         storageService: storage,
@@ -451,6 +472,138 @@ void main() {
       await tester.pumpAndSettle();
       expect(provider.currentTab, equals(0));
       expect(find.byType(HomeScreen), findsOneWidget);
+    });
+  });
+
+  Widget buildAboutCardWidget({
+    ThemeMode themeMode = ThemeMode.dark,
+    double? textScale,
+    double width = 360.0,
+  }) {
+    return MaterialApp(
+      theme: SciChatTheme.light,
+      darkTheme: SciChatTheme.dark,
+      themeMode: themeMode,
+      home: MediaQuery(
+        data: MediaQueryData(
+          size: Size(width, 700),
+          textScaler: TextScaler.linear(textScale ?? 1.0),
+        ),
+        child: const Scaffold(
+          body: Padding(
+            padding: EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+            child: SingleChildScrollView(child: AboutCard()),
+          ),
+        ),
+      ),
+    );
+  }
+
+  group('SettingsScreen About Card Responsiveness & Layout Tests', () {
+    testWidgets(
+        '10. Kartu Tentang menampilkan seluruh data dan nilai berada di dalam batas kartu pada SettingsScreen',
+        (tester) async {
+      final storage = MockTestStorageService();
+      final provider = SciChatProvider(
+        storageService: storage,
+        geminiService: MockTestGeminiService(),
+      );
+      await provider.init();
+
+      await tester.pumpWidget(buildSettingsWidget(provider));
+      await tester.pumpAndSettle();
+      await tester.drag(find.byType(ListView), const Offset(0, -500));
+      await tester.pumpAndSettle();
+
+      // Pastikan label dan nilai lengkap terlihat
+      expect(find.text('SciChat'), findsOneWidget);
+      expect(find.text('v2.0.0'), findsOneWidget);
+      expect(find.text('Sumber Data'), findsOneWidget);
+      expect(
+          find.text('arXiv, CrossRef, OpenAlex, Semantic Scholar, Archive.org'),
+          findsOneWidget);
+      expect(find.text('Model AI'), findsOneWidget);
+      expect(find.text('Agnes AI (Smart Routing)'), findsOneWidget);
+      expect(find.text('Deep Search'), findsOneWidget);
+      expect(find.text('Tersedia (Full-text Analysis)'), findsOneWidget);
+      expect(find.text('Cache TTL'), findsOneWidget);
+      expect(find.text('6 Jam'), findsOneWidget);
+
+      // Verifikasi batas geometris: teks Sumber Data tidak meluber ke kanan melebihi kartu
+      final cardFinder = find.byType(AboutCard);
+      final cardRect = tester.getRect(cardFinder);
+      final sumberDataRect = tester.getRect(find
+          .text('arXiv, CrossRef, OpenAlex, Semantic Scholar, Archive.org'));
+
+      expect(sumberDataRect.right, lessThanOrEqualTo(cardRect.right));
+      expect(sumberDataRect.left, greaterThanOrEqualTo(cardRect.left));
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets(
+        '11. Responsif pada layar sempit 320dp tanpa overflow horizontal dan teks berada di dalam batas kartu',
+        (tester) async {
+      tester.view.physicalSize = const Size(320, 700);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(() => tester.view.resetPhysicalSize());
+
+      await tester.pumpWidget(buildAboutCardWidget(width: 320));
+      await tester.pumpAndSettle();
+
+      expect(tester.takeException(), isNull);
+
+      final cardFinder = find.byType(AboutCard);
+      final cardRect = tester.getRect(cardFinder);
+      final sumberDataRect = tester.getRect(find
+          .text('arXiv, CrossRef, OpenAlex, Semantic Scholar, Archive.org'));
+
+      expect(sumberDataRect.right, lessThanOrEqualTo(cardRect.right));
+      expect(sumberDataRect.left, greaterThanOrEqualTo(cardRect.left));
+      expect(find.text('Sumber Data'), findsOneWidget);
+      expect(find.text('Cache TTL'), findsOneWidget);
+    });
+
+    testWidgets(
+        '12. Responsif pada layar standar 360dp dan 400dp serta text scaling 1.2x',
+        (tester) async {
+      for (final width in [360.0, 400.0]) {
+        for (final scale in [1.0, 1.2]) {
+          tester.view.physicalSize = Size(width, 800);
+          tester.view.devicePixelRatio = 1.0;
+
+          await tester
+              .pumpWidget(buildAboutCardWidget(width: width, textScale: scale));
+          await tester.pumpAndSettle();
+
+          expect(tester.takeException(), isNull);
+
+          final cardFinder = find.byType(AboutCard);
+          final cardRect = tester.getRect(cardFinder);
+          final sumberDataRect = tester.getRect(find.text(
+              'arXiv, CrossRef, OpenAlex, Semantic Scholar, Archive.org'));
+
+          expect(sumberDataRect.right, lessThanOrEqualTo(cardRect.right));
+          expect(sumberDataRect.left, greaterThanOrEqualTo(cardRect.left));
+        }
+      }
+      tester.view.resetPhysicalSize();
+    });
+
+    testWidgets('13. Kartu Tentang konsisten pada mode terang dan gelap',
+        (tester) async {
+      // Mode Terang
+      await tester.pumpWidget(buildAboutCardWidget(themeMode: ThemeMode.light));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      expect(find.text('Sumber Data'), findsOneWidget);
+      expect(find.text('Agnes AI (Smart Routing)'), findsOneWidget);
+
+      // Mode Gelap
+      await tester.pumpWidget(buildAboutCardWidget(themeMode: ThemeMode.dark));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      expect(find.text('Sumber Data'), findsOneWidget);
+      expect(find.text('Agnes AI (Smart Routing)'), findsOneWidget);
     });
   });
 }

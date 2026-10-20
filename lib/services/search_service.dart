@@ -583,6 +583,17 @@ class SearchService {
     return scored.map((e) => e.paper).toList();
   }
 
+  static final Map<String, String> _categoryFallbackKeywords = {
+    'cs.AI': 'Artificial Intelligence',
+    'cs.CL': 'Computational Linguistics Natural Language Processing',
+    'cs.CV': 'Computer Vision',
+    'cs.LG': 'Machine Learning Deep Learning',
+    'stat.ML': 'Statistical Machine Learning Data Science',
+    'math': 'Mathematics',
+    'physics': 'Physics',
+    'q-bio': 'Quantitative Biology',
+  };
+
   /// Removes arXiv query syntax so the text works on other search engines.
   static String toPlainKeywords(String query) {
     var q = query;
@@ -592,7 +603,17 @@ class SearchService {
     q = q.replaceAll(RegExp(r'\b(AND|OR|ANDNOT|NOT)\b'), ' ');
     q = q.replaceAll(RegExp(r'[()"]'), ' ');
     q = q.replaceAll(RegExp(r'\s+'), ' ').trim();
-    return q.isEmpty ? query : q;
+    if (q.isNotEmpty) return q;
+
+    final catMatch =
+        RegExp(r'\bcat:(\S+)', caseSensitive: false).firstMatch(query);
+    if (catMatch != null) {
+      final cat = catMatch.group(1)!;
+      final mapped = _categoryFallbackKeywords[cat];
+      if (mapped != null) return mapped;
+      return cat.replaceAll(RegExp(r'[^a-zA-Z0-9]+'), ' ').trim();
+    }
+    return query;
   }
 
   /// Compares two ISO-8601 / partial date strings for descending sort.

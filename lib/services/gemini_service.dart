@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import '../models/models.dart';
+import '../utils/follow_up_parser.dart';
 import '../utils/text_utils.dart';
 
 class GeminiService {
@@ -562,31 +563,141 @@ Gunakan Bahasa Indonesia dalam setiap jawabanmu.
     }
   }
 
-  Future<String> summarizePaper(ArxivPaper paper, {String? pdfText}) async {
-    final pdfContent = pdfText != null && pdfText.isNotEmpty
-        ? '\n\nIsi Teks PDF:\n$pdfText'
-        : '';
+  @visibleForTesting
+  static String buildFinalSummaryPrompt(
+    ArxivPaper paper, {
+    String? pdfText,
+    int maxTotalChars = 16000,
+  }) {
+    const preamble =
+        'Buatkan rangkuman makalah akademik ini untuk audiens peneliti dalam Bahasa Indonesia:\n\n';
 
-    final prompt = '''
-Buatkan rangkuman makalah akademik ini untuk audiens peneliti dalam Bahasa Indonesia:
-
-Judul: ${paper.title}
-Penulis: ${paper.authors.take(6).join(', ')}${paper.authors.length > 6 ? ' dkk.' : ''}
-Diterbitkan: ${paper.formattedDate}
-Kategori: ${paper.primaryCategory}
-${paper.doi != null ? 'DOI: ${paper.doi}' : ''}
-
-Abstrak:
-${paper.summary}$pdfContent
+    const instructionsBlock = '''\n
+INSTRUKSI RANGKUMAN (EVIDENCE-FIRST):
+1. Bedakan secara tegas antara:
+   - Tujuan dan kontribusi paper yang dinyatakan penulis.
+   - Metodologi yang benar-benar dijelaskan dalam teks di atas.
+   - Hasil kuantitatif dan metrik yang benar-benar tercantum (JANGAN mengarang metrik, dataset, ukuran sampel, atau angka).
+   - Keterbatasan yang dinyatakan oleh penulis atau batasan cakupan bukti teks.
+   - Interpretasi sintesis Anda sendiri.
+2. Jika bagian metode atau hasil tidak ditemukan dalam bukti teks di atas, nyatakan keterbatasan bukti tersebut secara jujur. Jangan menganggap ketiadaan bagian dalam kutipan sebagai bukti bahwa paper tidak memilikinya.
+3. JANGAN mencampuradukkan isi dengan makalah lain.
 
 Berikan rangkuman terstruktur dengan bagian-bagian berikut:
 **Apa yang dilakukan** — Kontribusi utama dalam 2-3 kalimat.
-**Metodologi** — Metode atau teknik utama yang digunakan.
-**Temuan utama** — Hasil utama dan signifikansinya.
+**Metodologi** — Metode atau teknik utama yang digunakan (nyatakan keterbatasan jika bukti terbatas).
+**Temuan utama** — Hasil utama dan metrik yang terbukti ada dalam teks.
+**Keterbatasan & Catatan** — Keterbatasan penulis serta catatan cakupan bukti teks.
 **Siapa yang harus membaca ini** — Audiens target dan kasus penggunaannya.
 
-Harap spesifik dan presisi. Jangan tambahkan informasi yang tidak ada dalam dokumen.
-''';
+Harap spesifik dan presisi. Jangan tambahkan informasi yang tidak ada dalam dokumen.''';
+
+    // 1. Sanitasi metadata secara proporsional agar tidak meledak pada input ekstrem
+    final safeTitle = paper.title.length > 500
+        ? '${paper.title.substring(0, 497)}...'
+        : paper.title;
+
+    final authorsList = paper.authors.take(6).join(', ');
+    final authorsSuffix = paper.authors.length > 6 ? ' dkk.' : '';
+    var authorsFormatted = '$authorsList$authorsSuffix';
+    if (authorsFormatted.length > 300) {
+      authorsFormatted = '${authorsFormatted.substring(0, 297)}...';
+    }
+
+    final safeDate = paper.formattedDate.length > 100
+        ? '${paper.formattedDate.substring(0, 97)}...'
+        : paper.formattedDate;
+
+    final safeCategory = paper.primaryCategory.length > 150
+        ? '${paper.primaryCategory.substring(0, 147)}...'
+        : paper.primaryCategory;
+
+    String? safeDoi;
+    if (paper.doi != null && paper.doi!.trim().isNotEmpty) {
+      final cleanDoi = paper.doi!.trim();
+      safeDoi = cleanDoi.length > 150
+          ? '${cleanDoi.substring(0, 147)}...'
+          : cleanDoi;
+    }
+
+    final metaBuffer = StringBuffer();
+    metaBuffer.writeln('Judul: $safeTitle');
+    metaBuffer.writeln('Penulis: $authorsFormatted');
+    metaBuffer.writeln('Diterbitkan: $safeDate');
+    metaBuffer.writeln('Kategori: $safeCategory');
+    if (safeDoi != null) {
+      metaBuffer.writeln('DOI: $safeDoi');
+    }
+    metaBuffer.writeln();
+
+    // 2. Evaluasi Abstrak & Anggaran (prioritaskan instruksi dan metadata)
+    const coreInstructionsLength = preamble.length + instructionsBlock.length;
+    final metaLength = metaBuffer.length;
+    final remainingAfterMeta =
+        maxTotalChars - coreInstructionsLength - metaLength;
+
+    var abstractText = paper.summary.trim();
+    if (abstractText.length > 3000) {
+      abstractText = '${abstractText.substring(0, 2997)}...';
+    }
+
+    final abstractBuffer = StringBuffer();
+    if (abstractText.isNotEmpty && remainingAfterMeta > 30) {
+      const abstractHeader = 'Abstrak:\n';
+      final allowedAbstractChars =
+          remainingAfterMeta - abstractHeader.length - 2;
+      if (allowedAbstractChars > 20) {
+        if (abstractText.length > allowedAbstractChars) {
+          abstractText =
+              '${abstractText.substring(0, allowedAbstractChars - 3)}...';
+        }
+        abstractBuffer.writeln(abstractHeader);
+        abstractBuffer.writeln(abstractText);
+        abstractBuffer.writeln();
+      }
+    }
+
+    // 3. Hitung anggaran tersisa untuk konteks PDF (PDF context dipangkas terlebih dahulu jika budget terbatas)
+    final usedSoFar = coreInstructionsLength +
+        metaBuffer.length +
+        abstractBuffer.length;
+    final availableForPdf = maxTotalChars - usedSoFar;
+
+    String pdfContent = '';
+    if (pdfText != null && pdfText.trim().isNotEmpty && availableForPdf > 50) {
+      const pdfHeader = 'Konteks Dokumen:\n';
+      final allowedPdfChars = availableForPdf - pdfHeader.length - 2;
+
+      if (allowedPdfChars > 10) {
+        String cleanPdf = pdfText.trim();
+        if (cleanPdf.length > allowedPdfChars) {
+          cleanPdf = '${cleanPdf.substring(0, allowedPdfChars - 3)}...';
+        }
+        pdfContent = '\n$pdfHeader$cleanPdf\n';
+      }
+    }
+
+    // 4. Rakit seluruh komponen menjadi prompt final
+    final finalBuffer = StringBuffer();
+    finalBuffer.write(preamble);
+    finalBuffer.write(metaBuffer.toString());
+    finalBuffer.write(abstractBuffer.toString());
+    if (pdfContent.isNotEmpty) {
+      finalBuffer.write(pdfContent);
+    }
+    finalBuffer.write(instructionsBlock);
+
+    final finalPrompt = finalBuffer.toString();
+
+    // Plafon keras defensif jika ada selisih formatting
+    if (finalPrompt.length > maxTotalChars) {
+      return finalPrompt.substring(0, maxTotalChars);
+    }
+    return finalPrompt;
+  }
+
+  Future<String> summarizePaper(ArxivPaper paper, {String? pdfText}) async {
+    final prompt = buildFinalSummaryPrompt(paper, pdfText: pdfText);
 
     final messages = [
       {'role': 'system', 'content': _systemPrompt},
@@ -605,7 +716,8 @@ Harap spesifik dan presisi. Jangan tambahkan informasi yang tidak ada dalam doku
     if (response.statusCode != 200) throw Exception('Summarization failed');
 
     final json = jsonDecode(response.body);
-    return json['choices']?[0]?['message']?['content'] ?? '';
+    final raw = json['choices']?[0]?['message']?['content'] ?? '';
+    return FollowUpParser.parse(raw).cleanContent;
   }
 
   static const _translationSystemPrompt = '''

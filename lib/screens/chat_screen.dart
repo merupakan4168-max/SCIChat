@@ -12,6 +12,7 @@ import '../providers/scichat_provider.dart';
 import '../theme/scichat_theme.dart';
 import 'package:file_picker/file_picker.dart';
 import '../widgets/chat_bubble.dart';
+import '../widgets/summary_skeleton.dart';
 import 'paper_detail_screen.dart';
 
 import 'package:markdown/markdown.dart' as md;
@@ -20,6 +21,7 @@ import 'package:share_plus/share_plus.dart';
 import '../widgets/paper_card.dart';
 import '../widgets/press_feedback.dart';
 import 'guide_screen.dart';
+import '../utils/follow_up_parser.dart';
 
 class ChatScreen extends StatefulWidget {
   const ChatScreen({super.key});
@@ -39,12 +41,35 @@ class _ChatScreenState extends State<ChatScreen> {
   int _lastFollowUpCount = 0;
   String _lastSessionId = '';
 
+  /// Tinggi aktual composer (overlay) yang diukur setelah layout; dipakai
+  /// sebagai ruang bawah ListView agar pesan terakhir tidak tertutup.
+  final _composerKey = GlobalKey();
+  double _composerHeight = 120;
+
+  void _measureComposer() {
+    if (!mounted) return;
+    final box = _composerKey.currentContext?.findRenderObject() as RenderBox?;
+    if (box == null || !box.hasSize) return;
+    final h = box.size.height;
+    if ((h - _composerHeight).abs() > 0.5) {
+      setState(() => _composerHeight = h);
+      // Jaga posisi dasar agar pesan terakhir tetap terlihat di atas composer.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && !_userScrolledUp && _scrollController.hasClients) {
+          _scrollController
+              .jumpTo(_scrollController.position.maxScrollExtent);
+        }
+      });
+    }
+  }
+
   @override
   void initState() {
     super.initState();
     _focusNode.addListener(() {
       setState(() => _inputHasFocus = _focusNode.hasFocus);
     });
+    WidgetsBinding.instance.addPostFrameCallback((_) => _measureComposer());
   }
 
   @override
@@ -207,10 +232,13 @@ class _ChatScreenState extends State<ChatScreen> {
                         },
                         child: ListView.builder(
                           controller: _scrollController,
-                          padding: const EdgeInsets.fromLTRB(16, 12, 16, 240),
+                          padding: EdgeInsets.fromLTRB(
+                              16, 12, 16, _composerHeight + 16),
                           itemCount: messages.length,
                           itemBuilder: (ctx, i) {
                             final msg = messages[i];
+                            final isLastAssistant =
+                                (i == messages.length - 1) && msg.isAssistant;
                             return ChatBubble(
                               message: msg,
                               isFavorite: (id) => provider.isFavorite(id),
@@ -235,6 +263,50 @@ class _ChatScreenState extends State<ChatScreen> {
                                   : null,
                               onDismissError: msg.status == MessageStatus.error
                                   ? () => provider.dismissError(msg.id)
+                                  : null,
+                              onRegenerate: isLastAssistant &&
+                                      !provider.isLoading &&
+                                      provider.apiKeySet
+                                  ? () => provider.regenerateLastResponse(
+                                        assistantMessageId: msg.id,
+                                      )
+                                  : null,
+                              onBranch: (!provider.isLoading &&
+                                      msg.isAssistant &&
+                                      (msg.status == MessageStatus.done ||
+                                          (msg.status == MessageStatus.error &&
+                                              msg.content.trim().isNotEmpty)))
+                                  ? () async {
+                                      final messenger =
+                                          ScaffoldMessenger.of(context);
+                                      final accentColor = context.colors.accent;
+                                      final success = await provider
+                                          .branchSessionFromMessage(msg.id);
+                                      if (!context.mounted) return;
+                                      if (success) {
+                                        _scrollToBottom();
+                                        messenger.showSnackBar(
+                                          SnackBar(
+                                            content: const Text(
+                                                'Berhasil mencabangkan ke obrolan baru.'),
+                                            backgroundColor: accentColor,
+                                            behavior: SnackBarBehavior.floating,
+                                            duration:
+                                                const Duration(seconds: 2),
+                                          ),
+                                        );
+                                      } else {
+                                        messenger.showSnackBar(
+                                          const SnackBar(
+                                            content: Text(
+                                                'Gagal mencabangkan obrolan.'),
+                                            backgroundColor: Colors.red,
+                                            behavior: SnackBarBehavior.floating,
+                                            duration: Duration(seconds: 2),
+                                          ),
+                                        );
+                                      }
+                                    }
                                   : null,
                             );
                           },
@@ -299,21 +371,34 @@ class _ChatScreenState extends State<ChatScreen> {
             left: 0,
             right: 0,
             bottom: 0,
-            child: _InputArea(
-              controller: _controller,
-              focusNode: _focusNode,
-              hasFocus: _inputHasFocus,
-              isLoading: provider.isLoading,
-              apiKeySet: provider.apiKeySet,
-              onSend: _send,
-              activeContexts: provider.activeContexts,
-              contextEvidence: provider.contextEvidence,
-              pendingAttachment: provider.pendingAttachment,
-              onRemoveContext: (id) => provider.removeActiveContext(id),
-              onCancelAttachment: () => provider.setPendingAttachment(null),
-              scrollToBottomButton: (_userScrolledUp && messages.isNotEmpty)
-                  ? _buildScrollToBottomButton(context)
-                  : null,
+            child: NotificationListener<SizeChangedLayoutNotification>(
+              onNotification: (_) {
+                WidgetsBinding.instance
+                    .addPostFrameCallback((_) => _measureComposer());
+                return false;
+              },
+              child: SizeChangedLayoutNotifier(
+                child: KeyedSubtree(
+                  key: _composerKey,
+                  child: _InputArea(
+                    controller: _controller,
+                    focusNode: _focusNode,
+                    hasFocus: _inputHasFocus,
+                    isLoading: provider.isLoading,
+                    apiKeySet: provider.apiKeySet,
+                    onSend: _send,
+                    activeContexts: provider.activeContexts,
+                    contextEvidence: provider.contextEvidence,
+                    pendingAttachment: provider.pendingAttachment,
+                    onRemoveContext: (id) => provider.removeActiveContext(id),
+                    onCancelAttachment: () => provider.setPendingAttachment(null),
+                    scrollToBottomButton:
+                        (_userScrolledUp && messages.isNotEmpty)
+                            ? _buildScrollToBottomButton(context)
+                            : null,
+                  ),
+                ),
+              ),
             ),
           ),
         ],
@@ -385,12 +470,71 @@ class _ChatScreenState extends State<ChatScreen> {
       scrolledUnderElevation: 0,
       shadowColor: Colors.transparent,
       surfaceTintColor: Colors.transparent,
-      titleSpacing: 16,
-      title: Text(
-        'SCIChat',
-        style: context.typography.titleLarge?.copyWith(
-          fontWeight: FontWeight.w700,
-          letterSpacing: -0.2,
+      titleSpacing: 0,
+      leading: Builder(
+        builder: (scaffoldContext) => IconButton(
+          icon: const Icon(Icons.menu, size: 22),
+          color: context.colors.textPrimary,
+          tooltip: 'Buka riwayat riset',
+          onPressed: () {
+            HapticFeedback.lightImpact();
+            Scaffold.of(scaffoldContext).openDrawer();
+          },
+        ),
+      ),
+      title: Builder(
+        builder: (scaffoldContext) => Semantics(
+          label:
+              'Sesi riset aktif: ${provider.activeSessionTitle}. Ketuk untuk membuka riwayat riset.',
+          button: true,
+          child: Tooltip(
+            message: 'Buka riwayat riset',
+            child: InkWell(
+              onTap: () {
+                HapticFeedback.lightImpact();
+                Scaffold.of(scaffoldContext).openDrawer();
+              },
+              borderRadius: BorderRadius.circular(8),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          'SCIChat',
+                          style: context.typography.labelSmall?.copyWith(
+                            color: context.colors.accent,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 0.4,
+                          ),
+                        ),
+                        const SizedBox(width: 4),
+                        Icon(
+                          Icons.keyboard_arrow_down_rounded,
+                          size: 14,
+                          color: context.colors.textMuted,
+                        ),
+                      ],
+                    ),
+                    Text(
+                      provider.activeSessionTitle,
+                      style: context.typography.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: -0.2,
+                        color: context.colors.textPrimary,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
         ),
       ),
       actions: [
@@ -555,7 +699,7 @@ class _EmptyStateState extends State<_EmptyState> {
               const SizedBox(width: 8),
               Flexible(
                 child: Text(
-                  'Trending Terbaru (AI & CS)',
+                  'Makalah Terbaru (AI & CS)',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: context.typography.labelSmall?.copyWith(
@@ -1159,6 +1303,153 @@ class _InputAreaState extends State<_InputArea> {
     );
   }
 
+  /// Panel konteks untuk tepat satu paper aktif (perilaku asli dipertahankan).
+  Widget _buildSingleContextPanel(BuildContext context) {
+    final c = context.colors;
+    final paper = widget.activeContexts.first;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: c.surface2,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: c.borderSubtle),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.library_books_outlined, size: 14, color: c.accent),
+              const SizedBox(width: 6),
+              Text(
+                'Active Paper Context',
+                style: GoogleFonts.jetBrainsMono(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w600,
+                  color: c.accent,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        paper.title,
+                        style: GoogleFonts.sourceSerif4(
+                          fontSize: 12,
+                          color: c.textPrimary,
+                          fontWeight: FontWeight.w600,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      const SizedBox(height: 2),
+                      _EvidenceStatus(evidence: widget.contextEvidence[paper.id]),
+                    ],
+                  ),
+                ),
+                PressFeedback(
+                    scaleFactor: 0.9,
+                    child: InkWell(
+                      onTap: () => widget.onRemoveContext(paper.id),
+                      borderRadius: BorderRadius.circular(12),
+                      child: Padding(
+                        padding: const EdgeInsets.all(4),
+                        child: Icon(Icons.close, size: 16, color: c.textMuted),
+                      ),
+                    )),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Bar ringkas untuk >1 paper aktif; detail dibuka lewat bottom sheet.
+  Widget _buildCompactContextBar(BuildContext context) {
+    final c = context.colors;
+    final count = widget.activeContexts.length;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Material(
+        color: c.surface2,
+        clipBehavior: Clip.antiAlias,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+          side: BorderSide(color: c.borderSubtle),
+        ),
+        child: Semantics(
+          button: true,
+          hint: 'Kelola makalah aktif',
+          child: InkWell(
+            key: const ValueKey('active_context_bar'),
+            onTap: () => _showActiveContextSheet(context),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(minHeight: 48),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                child: Row(
+                  children: [
+                    Icon(Icons.library_books_outlined,
+                        size: 16, color: c.accent),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        '$count Makalah Aktif',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: GoogleFonts.jetBrainsMono(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: c.accent,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Kelola',
+                      style: GoogleFonts.jetBrainsMono(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: c.textSecondary,
+                      ),
+                    ),
+                    Icon(Icons.keyboard_arrow_up,
+                        size: 20, color: c.textMuted),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showActiveContextSheet(BuildContext context) {
+    final provider = context.read<SciChatProvider>();
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      backgroundColor: context.colors.surface1,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (_) => _ActiveContextSheet(provider: provider),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final c = context.colors;
@@ -1186,132 +1477,10 @@ class _InputAreaState extends State<_InputArea> {
               ),
             ),
           if (_showSkillMenu) _buildSkillMenu(context),
-          if (widget.activeContexts.isNotEmpty)
-            Container(
-              margin: const EdgeInsets.only(bottom: 8),
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              decoration: BoxDecoration(
-                color: c.surface2,
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: c.borderSubtle),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Row(
-                    children: [
-                      Icon(Icons.library_books_outlined,
-                          size: 14, color: c.accent),
-                      const SizedBox(width: 6),
-                      Text(
-                        widget.activeContexts.length > 1
-                            ? '${widget.activeContexts.length} Makalah Aktif'
-                            : 'Active Paper Context',
-                        style: GoogleFonts.jetBrainsMono(
-                          fontSize: 10,
-                          fontWeight: FontWeight.w600,
-                          color: c.accent,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 6),
-                  ...widget.activeContexts.map((paper) {
-                    final evidence = widget.contextEvidence[paper.id];
-                    Widget evidenceWidget = const SizedBox.shrink();
-                    if (evidence != null) {
-                      if (evidence.level == EvidenceLevel.loading) {
-                        evidenceWidget = Row(
-                          children: [
-                            SizedBox(
-                                width: 8,
-                                height: 8,
-                                child: CircularProgressIndicator(
-                                    strokeWidth: 1.5, color: c.textMuted)),
-                            const SizedBox(width: 4),
-                            Text('Memeriksa...',
-                                style: GoogleFonts.sourceSerif4(
-                                    fontSize: 10, color: c.textMuted)),
-                          ],
-                        );
-                      } else if (evidence.level == EvidenceLevel.fullText) {
-                        evidenceWidget = Row(
-                          children: [
-                            Icon(Icons.check_circle_outline,
-                                size: 10, color: Colors.green[600]),
-                            const SizedBox(width: 4),
-                            Text('Full text tersedia',
-                                style: GoogleFonts.sourceSerif4(
-                                    fontSize: 10, color: Colors.green[600])),
-                          ],
-                        );
-                      } else if (evidence.level == EvidenceLevel.abstractOnly) {
-                        evidenceWidget = Row(
-                          children: [
-                            Icon(Icons.article_outlined,
-                                size: 10, color: Colors.orange[700]),
-                            const SizedBox(width: 4),
-                            Text('Abstract saja',
-                                style: GoogleFonts.sourceSerif4(
-                                    fontSize: 10, color: Colors.orange[700])),
-                          ],
-                        );
-                      } else {
-                        evidenceWidget = Row(
-                          children: [
-                            Icon(Icons.error_outline,
-                                size: 10, color: Colors.red[600]),
-                            const SizedBox(width: 4),
-                            Text('Teks tidak tersedia',
-                                style: GoogleFonts.sourceSerif4(
-                                    fontSize: 10, color: Colors.red[600])),
-                          ],
-                        );
-                      }
-                    }
-
-                    return Padding(
-                      padding: const EdgeInsets.only(bottom: 8),
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  paper.title,
-                                  style: GoogleFonts.sourceSerif4(
-                                    fontSize: 12,
-                                    color: c.textPrimary,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                                const SizedBox(height: 2),
-                                evidenceWidget,
-                              ],
-                            ),
-                          ),
-                          PressFeedback(
-                              scaleFactor: 0.9,
-                              child: InkWell(
-                                onTap: () => widget.onRemoveContext(paper.id),
-                                borderRadius: BorderRadius.circular(12),
-                                child: Padding(
-                                  padding: const EdgeInsets.all(4),
-                                  child: Icon(Icons.close,
-                                      size: 16, color: c.textMuted),
-                                ),
-                              )),
-                        ],
-                      ),
-                    );
-                  }),
-                ],
-              ),
-            ),
+          if (widget.activeContexts.length > 1)
+            _buildCompactContextBar(context)
+          else if (widget.activeContexts.length == 1)
+            _buildSingleContextPanel(context),
           AnimatedContainer(
             duration: 180.ms,
             curve: Curves.easeOutCubic,
@@ -1502,6 +1671,7 @@ class _SummarizeSheetState extends State<_SummarizeSheet> {
   String? _summary;
   bool _loading = true;
   String? _error;
+  bool _isSaving = false;
 
   @override
   void initState() {
@@ -1512,11 +1682,14 @@ class _SummarizeSheetState extends State<_SummarizeSheet> {
   Future<void> _load() async {
     try {
       final s = await widget.provider.summarizePaper(widget.paper);
+      if (!mounted) return;
+      final clean = s != null ? FollowUpParser.parse(s).cleanContent : null;
       setState(() {
-        _summary = s;
+        _summary = clean;
         _loading = false;
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _error = e.toString();
         _loading = false;
@@ -1555,13 +1728,108 @@ class _SummarizeSheetState extends State<_SummarizeSheet> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    'AI Summary',
-                    style: GoogleFonts.playfairDisplay(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w700,
-                      color: context.colors.textPrimary,
-                    ),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        'AI Summary',
+                        style: GoogleFonts.playfairDisplay(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w700,
+                          color: context.colors.textPrimary,
+                        ),
+                      ),
+                      ListenableBuilder(
+                        listenable: widget.provider,
+                        builder: (context, _) {
+                          final isSaved = widget.provider
+                              .isPaperSummarySaved(widget.paper.id);
+                          final canSave = !_loading &&
+                              !_isSaving &&
+                              _error == null &&
+                              _summary != null &&
+                              _summary!.trim().isNotEmpty &&
+                              !_summary!.startsWith('Failed to summarize:');
+
+                          return PressFeedback(
+                            scaleFactor: 0.92,
+                            child: IconButton(
+                              icon: Icon(
+                                isSaved
+                                    ? Icons.bookmark
+                                    : Icons.bookmark_add_outlined,
+                                size: 22,
+                                color: isSaved
+                                    ? context.colors.accent
+                                    : (canSave
+                                        ? context.colors.textMuted
+                                        : context.colors.textMuted
+                                            .withValues(alpha: 0.3)),
+                              ),
+                              tooltip: isSaved
+                                  ? 'Tersimpan di Catatan'
+                                  : 'Simpan ke Catatan',
+                              onPressed: (canSave && !isSaved)
+                                  ? () async {
+                                      setState(() => _isSaving = true);
+                                      HapticFeedback.lightImpact();
+                                      final messenger =
+                                          ScaffoldMessenger.of(context);
+                                      final accentColor = context.colors.accent;
+
+                                      final cleanSummary =
+                                          FollowUpParser.parse(_summary!)
+                                              .cleanContent;
+                                      final success = await widget.provider
+                                          .savePaperSummary(
+                                        paper: widget.paper,
+                                        summary: cleanSummary,
+                                      );
+
+                                      if (!mounted) return;
+                                      setState(() => _isSaving = false);
+
+                                      if (success) {
+                                        messenger.showSnackBar(
+                                          SnackBar(
+                                            content: const Text(
+                                              'Ringkasan berhasil disimpan ke Catatan.',
+                                              style: TextStyle(
+                                                  color: Colors.white),
+                                            ),
+                                            backgroundColor: accentColor,
+                                            behavior: SnackBarBehavior.floating,
+                                            duration: const Duration(seconds: 2),
+                                          ),
+                                        );
+                                      } else {
+                                        messenger.showSnackBar(
+                                          const SnackBar(
+                                            content: Text(
+                                              'Gagal menyimpan ringkasan ke Catatan.',
+                                              style: TextStyle(
+                                                  color: Colors.white),
+                                            ),
+                                            backgroundColor:
+                                                Color(0xFFB05050),
+                                            behavior: SnackBarBehavior.floating,
+                                            duration:
+                                                Duration(seconds: 2),
+                                          ),
+                                        );
+                                      }
+                                    }
+                                  : null,
+                              padding: EdgeInsets.zero,
+                              constraints: const BoxConstraints(
+                                minWidth: 36,
+                                minHeight: 36,
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ],
                   ),
                   const SizedBox(height: 4),
                   Text(
@@ -1582,12 +1850,7 @@ class _SummarizeSheetState extends State<_SummarizeSheet> {
             ),
             Expanded(
               child: _loading
-                  ? Center(
-                      child: CircularProgressIndicator(
-                        color: context.colors.accent,
-                        strokeWidth: 2,
-                      ),
-                    )
+                  ? SummarySkeleton(controller: controller)
                   : _error != null
                       ? Center(
                           child: Text(
@@ -1602,7 +1865,7 @@ class _SummarizeSheetState extends State<_SummarizeSheet> {
                           controller: controller,
                           padding: const EdgeInsets.fromLTRB(20, 16, 20, 32),
                           child: MarkdownBody(
-                            data: _summary ?? '',
+                            data: FollowUpParser.parse(_summary ?? '').cleanContent,
                             selectable: true,
                             builders: {
                               'latex': CustomLatexElementBuilder(context),
@@ -1691,12 +1954,15 @@ class _ChatDrawer extends StatelessWidget {
                 children: [
                   Icon(Icons.history, color: context.colors.textPrimary),
                   const SizedBox(width: 12),
-                  Text(
-                    'Riwayat Riset',
-                    style: GoogleFonts.playfairDisplay(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w700,
-                      color: context.colors.textPrimary,
+                  Expanded(
+                    child: Text(
+                      'Riwayat Riset',
+                      style: GoogleFonts.playfairDisplay(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w700,
+                        color: context.colors.textPrimary,
+                      ),
+                      overflow: TextOverflow.ellipsis,
                     ),
                   ),
                 ],
@@ -1730,7 +1996,10 @@ class _ChatDrawer extends StatelessWidget {
                               : context.colors.textMuted,
                         ),
                         title: Text(
-                          session.title,
+                          (session.title.trim().isEmpty ||
+                                  session.title == 'New Chat')
+                              ? 'Obrolan Baru'
+                              : session.title,
                           style: context.typography.bodyMedium?.copyWith(
                             color: isActive
                                 ? context.colors.textPrimary
@@ -1813,6 +2082,179 @@ class _ChatDrawer extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+// ── Active Paper Context helpers ────────────────────────────────────────────
+class _EvidenceStatus extends StatelessWidget {
+  final PaperEvidence? evidence;
+
+  const _EvidenceStatus({required this.evidence});
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    final e = evidence;
+    if (e == null) return const SizedBox.shrink();
+
+    if (e.level == EvidenceLevel.loading) {
+      return Row(
+        children: [
+          SizedBox(
+              width: 8,
+              height: 8,
+              child: CircularProgressIndicator(
+                  strokeWidth: 1.5, color: c.textMuted)),
+          const SizedBox(width: 4),
+          Text('Memeriksa...',
+              style:
+                  GoogleFonts.sourceSerif4(fontSize: 10, color: c.textMuted)),
+        ],
+      );
+    }
+    final IconData icon;
+    final Color color;
+    final String label;
+    if (e.level == EvidenceLevel.fullText) {
+      icon = Icons.check_circle_outline;
+      color = Colors.green.shade600;
+      label = 'Full text tersedia';
+    } else if (e.level == EvidenceLevel.abstractOnly) {
+      icon = Icons.article_outlined;
+      color = Colors.orange.shade700;
+      label = 'Abstract saja';
+    } else {
+      icon = Icons.error_outline;
+      color = Colors.red.shade600;
+      label = 'Teks tidak tersedia';
+    }
+    return Row(
+      children: [
+        Icon(icon, size: 10, color: color),
+        const SizedBox(width: 4),
+        Flexible(
+          child: Text(label,
+              style: GoogleFonts.sourceSerif4(fontSize: 10, color: color)),
+        ),
+      ],
+    );
+  }
+}
+
+/// Bottom sheet pengelolaan paper aktif (>1). Mendengarkan provider langsung
+/// agar jumlah dan daftar langsung diperbarui setelah penghapusan.
+class _ActiveContextSheet extends StatelessWidget {
+  final SciChatProvider provider;
+
+  const _ActiveContextSheet({required this.provider});
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    return ListenableBuilder(
+      listenable: provider,
+      builder: (ctx, _) {
+        final papers = provider.activeContexts;
+        if (papers.isEmpty) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (ctx.mounted) Navigator.of(ctx).maybePop();
+          });
+        }
+        return Padding(
+          padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
+          child: SafeArea(
+            top: false,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 4, 0),
+                  child: Row(
+                    children: [
+                      Icon(Icons.library_books_outlined,
+                          size: 16, color: c.accent),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          '${papers.length} Makalah Aktif',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: GoogleFonts.jetBrainsMono(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: c.accent,
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: 'Tutup',
+                        constraints: const BoxConstraints(
+                            minWidth: 48, minHeight: 48),
+                        icon: Icon(Icons.close, size: 20, color: c.textMuted),
+                        onPressed: () => Navigator.of(ctx).maybePop(),
+                      ),
+                    ],
+                  ),
+                ),
+                Divider(height: 1, color: c.borderSubtle),
+                Flexible(
+                  child: ListView.builder(
+                    shrinkWrap: true,
+                    padding: const EdgeInsets.fromLTRB(16, 4, 4, 8),
+                    itemCount: papers.length,
+                    itemBuilder: (_, i) {
+                      final paper = papers[i];
+                      return ConstrainedBox(
+                        constraints: const BoxConstraints(minHeight: 56),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Padding(
+                                padding:
+                                    const EdgeInsets.symmetric(vertical: 8),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      paper.title,
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: GoogleFonts.sourceSerif4(
+                                        fontSize: 13,
+                                        color: c.textPrimary,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 2),
+                                    _EvidenceStatus(
+                                        evidence:
+                                            provider.contextEvidence[paper.id]),
+                                  ],
+                                ),
+                              ),
+                            ),
+                            IconButton(
+                              tooltip: 'Hapus dari konteks',
+                              constraints: const BoxConstraints(
+                                  minWidth: 48, minHeight: 48),
+                              icon: Icon(Icons.close,
+                                  size: 20, color: c.textMuted),
+                              onPressed: () =>
+                                  provider.removeActiveContext(paper.id),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 }

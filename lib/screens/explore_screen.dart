@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../models/models.dart';
+import '../providers/scichat_provider.dart';
 import '../services/search_service.dart';
 import '../theme/scichat_theme.dart';
-import 'package:provider/provider.dart';
-import '../providers/scichat_provider.dart';
+import '../widgets/ghost_loader.dart';
 import '../widgets/paper_card.dart';
 import '../widgets/press_feedback.dart';
 import 'paper_detail_screen.dart';
@@ -17,28 +18,23 @@ class ExploreScreen extends StatefulWidget {
 }
 
 class _ExploreScreenState extends State<ExploreScreen> {
-  late final SearchService _searchService;
   final TextEditingController _searchController = TextEditingController();
-  bool _isLoading = false;
-  List<ArxivPaper> _papers = [];
-  String _selectedCategory = 'cs.AI';
-
-  final List<Map<String, String>> _categories = [
-    {'id': 'cs.AI', 'label': 'Kecerdasan Buatan (CS)'},
-    {'id': 'cs.CL', 'label': 'Komputasi Linguistik (CS)'},
-    {'id': 'cs.CV', 'label': 'Visi Komputer (CS)'},
-    {'id': 'cs.LG', 'label': 'Machine Learning (CS)'},
-    {'id': 'stat.ML', 'label': 'Machine Learning (Stat)'},
-    {'id': 'math', 'label': 'Matematika (All)'},
-    {'id': 'physics', 'label': 'Fisika (All)'},
-    {'id': 'q-bio', 'label': 'Biologi Kuantitatif'},
-  ];
 
   @override
   void initState() {
     super.initState();
-    _searchService = widget.searchService ?? SearchService();
-    _loadCategory(_selectedCategory);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final provider = context.read<SciChatProvider>();
+      if (provider.explorePapers.isEmpty && !provider.isLoadingExplore) {
+        provider.loadExploreTopic(
+          provider.selectedExploreTopicId.isNotEmpty
+              ? provider.selectedExploreTopicId
+              : 'cs.AI',
+          customSearch: widget.searchService,
+        );
+      }
+    });
   }
 
   @override
@@ -47,88 +43,27 @@ class _ExploreScreenState extends State<ExploreScreen> {
     super.dispose();
   }
 
-  Future<void> _performSearch(String query) async {
-    final q = query.trim();
-    if (q.isEmpty) return;
-    
-    setState(() {
-      _selectedCategory = ''; // Deselect category
-      _isLoading = true;
-    });
-
-    try {
-      final results = await _searchService.search(
-        query: q,
-        filter: const SearchFilter(maxResults: 20, sortBy: 'relevance'),
-        deep: false,
-      );
-      if (!mounted) return;
-      setState(() {
-        _papers = results;
-      });
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Pencarian gagal: $e')),
-        );
-      }
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isLoading = false;
-        });
-      }
-    }
-  }
-
-  Future<void> _loadCategory(String category) async {
-    setState(() {
-      _selectedCategory = category;
-      _isLoading = true;
-    });
-
-    try {
-      final results = await _searchService.search(
-        query: 'cat:$category',
-        filter: const SearchFilter(maxResults: 20, sortBy: 'submittedDate'),
-        deep: false,
-      );
-      if (!mounted) return;
-      setState(() {
-        _papers = results.where((p) => p.categories.contains(category) || p.id.contains('arxiv')).toList();
-      });
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Gagal memuat kategori: $e')),
-        );
-      }
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isLoading = false;
-        });
-      }
-    }
-  }
-
   void _clearSearch() {
     _searchController.clear();
     FocusScope.of(context).unfocus();
-    if (_selectedCategory.isEmpty) {
-      _loadCategory('cs.AI');
-    }
+    final provider = context.read<SciChatProvider>();
+    provider.loadExploreTopic('cs.AI', customSearch: widget.searchService);
   }
 
   @override
   Widget build(BuildContext context) {
     final provider = context.watch<SciChatProvider>();
+    final papers = provider.explorePapers;
+    final isLoading = provider.isLoadingExplore;
+    final error = provider.exploreError;
+    final selectedTopicId = provider.selectedExploreTopicId;
+
     return Scaffold(
       backgroundColor: context.colors.surface0,
       appBar: AppBar(
         backgroundColor: context.colors.surface0,
         title: Text(
-          'Jelajah arXiv',
+          'Jelajah Riset',
           style: context.typography.titleLarge?.copyWith(fontWeight: FontWeight.w700),
         ),
         bottom: PreferredSize(
@@ -160,50 +95,51 @@ class _ExploreScreenState extends State<ExploreScreen> {
                       suffixIcon: PressFeedback(
                         scaleFactor: 0.92,
                         child: IconButton(
-                        icon: Icon(Icons.clear, size: 20, color: context.colors.textMuted),
-                        onPressed: _clearSearch,
-                      )),
+                          icon: Icon(Icons.clear, size: 20, color: context.colors.textMuted),
+                          onPressed: _clearSearch,
+                        ),
+                      ),
                     ),
                     onSubmitted: (query) {
                       FocusScope.of(context).unfocus();
-                      _performSearch(query);
+                      provider.searchExplore(query, customSearch: widget.searchService);
                     },
                   ),
                 ),
-
                 Expanded(
                   child: ListView.separated(
                     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
                     scrollDirection: Axis.horizontal,
-                    itemCount: _categories.length,
+                    itemCount: kDefaultExploreTopics.length,
                     separatorBuilder: (context, index) => const SizedBox(width: 8),
                     itemBuilder: (context, index) {
-                      final cat = _categories[index];
-                      final isSelected = _selectedCategory == cat['id'];
+                      final topic = kDefaultExploreTopics[index];
+                      final isSelected = selectedTopicId == topic.id;
                       return PressFeedback(
                         scaleFactor: 0.96,
                         child: ChoiceChip(
-                        label: Text(cat['label']!),
-                        selected: isSelected,
-                        onSelected: (selected) {
-                          if (selected && !isSelected) {
-                            _searchController.clear();
-                            FocusScope.of(context).unfocus();
-                            _loadCategory(cat['id']!);
-                          }
-                        },
-                        backgroundColor: context.colors.surface2,
-                        selectedColor: context.colors.accentDim,
-                        labelStyle: context.typography.labelMedium?.copyWith(
-                          color: isSelected ? context.colors.accent : context.colors.textSecondary,
-                        ),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(20),
-                          side: BorderSide(
-                            color: isSelected ? context.colors.accent : context.colors.borderSubtle,
+                          label: Text(topic.label),
+                          selected: isSelected,
+                          onSelected: (selected) {
+                            if (selected && !isSelected) {
+                              _searchController.clear();
+                              FocusScope.of(context).unfocus();
+                              provider.loadExploreTopic(topic.id, customSearch: widget.searchService);
+                            }
+                          },
+                          backgroundColor: context.colors.surface2,
+                          selectedColor: context.colors.accentDim,
+                          labelStyle: context.typography.labelMedium?.copyWith(
+                            color: isSelected ? context.colors.accent : context.colors.textSecondary,
+                          ),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(20),
+                            side: BorderSide(
+                              color: isSelected ? context.colors.accent : context.colors.borderSubtle,
+                            ),
                           ),
                         ),
-                      ));
+                      );
                     },
                   ),
                 ),
@@ -212,41 +148,168 @@ class _ExploreScreenState extends State<ExploreScreen> {
           ),
         ),
       ),
-      body: _isLoading
-          ? Center(child: CircularProgressIndicator(color: context.colors.accent))
-          : _papers.isEmpty
-              ? Center(
-                  child: Text(
-                    'Tidak ada hasil',
-                    style: context.typography.bodyMedium?.copyWith(color: context.colors.textMuted),
+      body: isLoading
+          ? Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const GhostLoader(size: 38),
+                  const SizedBox(height: 16),
+                  Text(
+                    'Memuat literatur riset...',
+                    style: context.typography.bodyMedium?.copyWith(
+                      color: context.colors.textMuted,
+                    ),
+                  ),
+                ],
+              ),
+            )
+          : error != null
+              ? RefreshIndicator(
+                  onRefresh: () => provider.refreshExplore(
+                    customSearch: widget.searchService,
+                  ),
+                  color: context.colors.accent,
+                  backgroundColor: context.colors.surface1,
+                  child: LayoutBuilder(
+                    builder: (context, constraints) => SingleChildScrollView(
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      child: ConstrainedBox(
+                        constraints: BoxConstraints(minHeight: constraints.maxHeight),
+                        child: Center(
+                          child: Padding(
+                            padding: const EdgeInsets.all(24.0),
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(
+                                  Icons.error_outline_rounded,
+                                  size: 48,
+                                  color: context.colors.accent,
+                                ),
+                                const SizedBox(height: 16),
+                                Text(
+                                  'Gagal Memuat Literatur',
+                                  style: context.typography.titleMedium?.copyWith(
+                                    fontWeight: FontWeight.w700,
+                                    color: context.colors.textPrimary,
+                                  ),
+                                ),
+                                const SizedBox(height: 8),
+                                Text(
+                                  error,
+                                  textAlign: TextAlign.center,
+                                  style: context.typography.bodySmall?.copyWith(
+                                    color: context.colors.textMuted,
+                                  ),
+                                ),
+                                const SizedBox(height: 20),
+                                PressFeedback(
+                                  child: ElevatedButton.icon(
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: context.colors.accent,
+                                      foregroundColor: Colors.white,
+                                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(10),
+                                      ),
+                                    ),
+                                    onPressed: () => provider.refreshExplore(
+                                      customSearch: widget.searchService,
+                                    ),
+                                    icon: const Icon(Icons.refresh, size: 18),
+                                    label: const Text('Coba Lagi'),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
                   ),
                 )
-              : ListView.separated(
-                  padding: const EdgeInsets.all(16),
-                  itemCount: _papers.length,
-                  separatorBuilder: (context, index) => const SizedBox(height: 16),
-                  itemBuilder: (context, index) {
-                    final paper = _papers[index];
-                    return PaperCard(
-                      paper: paper,
-                      isFavorite: provider.isFavorite(paper.id),
-                      onFavoriteToggle: () => provider.toggleFavorite(paper),
-                      onChatPdf: () {
-                         provider.setActivePaper(paper);
-                         provider.setTab(0);
-                      },
-                      onTap: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => PaperDetailScreen(paper: paper),
+              : papers.isEmpty
+                  ? RefreshIndicator(
+                      onRefresh: () => provider.refreshExplore(
+                        customSearch: widget.searchService,
+                      ),
+                      color: context.colors.accent,
+                      backgroundColor: context.colors.surface1,
+                      child: LayoutBuilder(
+                        builder: (context, constraints) => SingleChildScrollView(
+                          physics: const AlwaysScrollableScrollPhysics(),
+                          child: ConstrainedBox(
+                            constraints: BoxConstraints(minHeight: constraints.maxHeight),
+                            child: Center(
+                              child: Padding(
+                                padding: const EdgeInsets.all(24.0),
+                                child: Column(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    Icon(
+                                      Icons.auto_stories_outlined,
+                                      size: 48,
+                                      color: context.colors.textMuted,
+                                    ),
+                                    const SizedBox(height: 16),
+                                    Text(
+                                      'Tidak Ada Makalah Ditemukan',
+                                      style: context.typography.titleMedium?.copyWith(
+                                        fontWeight: FontWeight.w700,
+                                        color: context.colors.textPrimary,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 8),
+                                    Text(
+                                      'Coba pilih topik riset lain atau masukkan kata kunci pencarian yang berbeda.',
+                                      textAlign: TextAlign.center,
+                                      style: context.typography.bodySmall?.copyWith(
+                                        color: context.colors.textMuted,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
                           ),
-                        );
-                      },
-                      index: index,
-                    );
-                  },
-                ),
+                        ),
+                      ),
+                    )
+                  : RefreshIndicator(
+                      onRefresh: () => provider.refreshExplore(
+                        customSearch: widget.searchService,
+                      ),
+                      color: context.colors.accent,
+                      backgroundColor: context.colors.surface1,
+                      child: ListView.separated(
+                        padding: const EdgeInsets.all(16),
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        itemCount: papers.length,
+                        separatorBuilder: (context, index) => const SizedBox(height: 16),
+                        itemBuilder: (context, index) {
+                          final paper = papers[index];
+                          return PaperCard(
+                            paper: paper,
+                            isFavorite: provider.isFavorite(paper.id),
+                            onFavoriteToggle: () => provider.toggleFavorite(paper),
+                            onChatPdf: () {
+                              provider.setActivePaper(paper);
+                              provider.setTab(0);
+                            },
+                            onTap: () {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => PaperDetailScreen(paper: paper),
+                                ),
+                              );
+                            },
+                            index: index,
+                          );
+                        },
+                      ),
+                    ),
     );
   }
 }

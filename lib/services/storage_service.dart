@@ -118,14 +118,37 @@ class StorageService {
     return raw.map((s) => ResearchNote.fromJson(jsonDecode(s))).toList();
   }
 
-  Future<void> addNote(ResearchNote note) async {
+  Future<bool> addNote(ResearchNote note) async {
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getStringList(_notesKey) ?? [];
     
-    // Prevent duplicate based on sourceMessageId
+    // Prevent duplicate based on chat message provenance or paper provenance
     final exists = raw.any((s) {
       try {
-        return jsonDecode(s)['sourceMessageId'] == note.sourceMessageId;
+        final map = jsonDecode(s);
+        // 1. Catatan obrolan: deduplikasi berbasis sourceMessageId yang tidak kosong
+        if (note.sourceMessageId.isNotEmpty &&
+            map['sourceMessageId'] == note.sourceMessageId) {
+          return true;
+        }
+        // 2. Catatan ringkasan paper mandiri: deduplikasi berbasis ID paper sumber
+        if (note.sourceMessageId.isEmpty &&
+            note.sources.isNotEmpty &&
+            note.sources.first.id.isNotEmpty) {
+          final notePaperId = note.sources.first.id;
+          final rawMsgId = map['sourceMessageId'] as String? ?? '';
+          if (rawMsgId.isEmpty) {
+            final rawSources = map['sources'] as List?;
+            if (rawSources != null && rawSources.isNotEmpty) {
+              final firstPaper = rawSources.first;
+              if (firstPaper is Map && firstPaper['id'] == notePaperId) {
+                return true;
+              }
+            }
+          }
+        }
+        // 3. Fallback: pencocokan ID unik note
+        return map['id'] == note.id;
       } catch (_) {
         return false;
       }
@@ -133,8 +156,9 @@ class StorageService {
 
     if (!exists) {
       raw.add(jsonEncode(note.toJson()));
-      await prefs.setStringList(_notesKey, raw);
+      return await prefs.setStringList(_notesKey, raw);
     }
+    return false;
   }
 
   Future<void> removeNote(String noteId) async {

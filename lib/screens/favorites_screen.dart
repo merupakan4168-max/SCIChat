@@ -16,7 +16,12 @@ import '../utils/export_utils.dart';
 import '../utils/text_utils.dart';
 
 class FavoritesScreen extends StatelessWidget {
-  const FavoritesScreen({super.key});
+  final int initialTabIndex;
+
+  const FavoritesScreen({
+    super.key,
+    this.initialTabIndex = 0,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -25,6 +30,7 @@ class FavoritesScreen extends StatelessWidget {
 
     return DefaultTabController(
       length: 2,
+      initialIndex: initialTabIndex,
       child: Scaffold(
         backgroundColor: context.colors.surface0,
       appBar: AppBar(
@@ -262,6 +268,7 @@ class _EmptyLibrary extends StatelessWidget {
             const SizedBox(height: 20),
             Text(
               'Belum ada paper tersimpan.',
+              textAlign: TextAlign.center,
               style: context.typography.titleLarge?.copyWith(
                 fontWeight: FontWeight.w600,
               ),
@@ -366,12 +373,23 @@ class _NotesTab extends StatelessWidget {
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 14, 8, 8),
                   child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        '${note.savedAt.day}/${note.savedAt.month}/${note.savedAt.year} • ${note.savedAt.hour}:${note.savedAt.minute.toString().padLeft(2, '0')}',
-                        style: context.typography.labelSmall?.copyWith(color: context.colors.textMuted),
+                      Expanded(
+                        child: Wrap(
+                          spacing: 8,
+                          runSpacing: 4,
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          children: [
+                            _NoteTypeBadge(isPaperSummary: note.isPaperSummary),
+                            Text(
+                              '${note.savedAt.day}/${note.savedAt.month}/${note.savedAt.year} • ${note.savedAt.hour}:${note.savedAt.minute.toString().padLeft(2, '0')}',
+                              style: context.typography.labelSmall?.copyWith(color: context.colors.textMuted),
+                            ),
+                          ],
+                        ),
                       ),
+                      const SizedBox(width: 8),
                       IconButton(
                         icon: Icon(Icons.delete_outline, size: 18, color: context.colors.textMuted),
                         onPressed: () {
@@ -405,11 +423,21 @@ class _NotesTab extends StatelessWidget {
                     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                     child: Row(
                       children: [
-                        Icon(Icons.library_books_outlined, size: 14, color: context.colors.accentDim),
+                        Icon(
+                          note.isPaperSummary ? Icons.description_outlined : Icons.library_books_outlined,
+                          size: 14,
+                          color: context.colors.accentDim,
+                        ),
                         const SizedBox(width: 6),
-                        Text(
-                          '$sourcesCount sumber referensi',
-                          style: context.typography.labelSmall?.copyWith(color: context.colors.accentDim),
+                        Expanded(
+                          child: Text(
+                            note.isPaperSummary
+                                ? (note.primaryPaper?.title ?? 'Makalah rujukan')
+                                : '$sourcesCount sumber referensi',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: context.typography.labelSmall?.copyWith(color: context.colors.accentDim),
+                          ),
                         ),
                       ],
                     ),
@@ -420,6 +448,46 @@ class _NotesTab extends StatelessWidget {
           )),
         );
       },
+    );
+  }
+}
+
+class _NoteTypeBadge extends StatelessWidget {
+  final bool isPaperSummary;
+
+  const _NoteTypeBadge({required this.isPaperSummary});
+
+  @override
+  Widget build(BuildContext context) {
+    final label = isPaperSummary ? 'Ringkasan Makalah' : 'Catatan Riset';
+    final icon = isPaperSummary ? Icons.auto_stories_outlined : Icons.sticky_note_2_outlined;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: context.colors.accentFaint,
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: context.colors.accentDim.withValues(alpha: 0.3)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 11, color: context.colors.accent),
+          const SizedBox(width: 4),
+          Flexible(
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: context.typography.labelSmall?.copyWith(
+                color: context.colors.accent,
+                fontSize: 10,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -462,10 +530,14 @@ class _NoteDetailSheet extends StatelessWidget {
                   children: [
                     Row(
                       children: [
-                        Icon(Icons.sticky_note_2, size: 20, color: context.colors.accent),
+                        Icon(
+                          note.isPaperSummary ? Icons.auto_stories : Icons.sticky_note_2,
+                          size: 20,
+                          color: context.colors.accent,
+                        ),
                         const SizedBox(width: 8),
                         Text(
-                          'Catatan Riset',
+                          note.isPaperSummary ? 'Ringkasan Makalah' : 'Catatan Riset',
                           style: context.typography.titleMedium?.copyWith(fontWeight: FontWeight.w700),
                         ),
                       ],
@@ -517,9 +589,26 @@ class _NoteDetailSheet extends StatelessWidget {
                 padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
                 child: Align(
                   alignment: Alignment.centerLeft,
-                  child: Text(
-                    'Disimpan pada: ${note.savedAt.day}/${note.savedAt.month}/${note.savedAt.year}',
-                    style: context.typography.labelSmall?.copyWith(color: context.colors.textMuted),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Disimpan pada: ${note.savedAt.day}/${note.savedAt.month}/${note.savedAt.year}',
+                        style: context.typography.labelSmall?.copyWith(color: context.colors.textMuted),
+                      ),
+                      if (note.isPaperSummary && note.primaryPaper != null) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          note.primaryPaper!.title,
+                          style: context.typography.labelMedium?.copyWith(
+                            color: context.colors.accent,
+                            fontWeight: FontWeight.w600,
+                          ),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
+                    ],
                   ),
                 ),
               ),

@@ -39,7 +39,7 @@ class FakeStorageService extends StorageService {
   @override
   Future<void> saveChatSessions(List<ChatSession> sessions) async {}
   @override
-  Future<void> addNote(ResearchNote note) async {}
+  Future<bool> addNote(ResearchNote note) async => true;
   @override
   Future<SearchFilter> getSearchFilter() async => const SearchFilter();
   @override

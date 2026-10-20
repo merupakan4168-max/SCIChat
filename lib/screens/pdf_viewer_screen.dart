@@ -3,6 +3,7 @@ import 'package:syncfusion_flutter_pdfviewer/pdfviewer.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../models/models.dart';
 import '../theme/scichat_theme.dart';
+import '../widgets/blob_loader.dart';
 import '../widgets/press_feedback.dart';
 
 class PdfViewerScreen extends StatefulWidget {
@@ -31,11 +32,12 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
       appBar: AppBar(
         backgroundColor: context.colors.surface0,
         leading: PressFeedback(
-          scaleFactor: 0.92,
-          child: IconButton(
-          icon: Icon(Icons.arrow_back, size: 20, color: context.colors.textSecondary),
-          onPressed: () => Navigator.pop(context),
-        )),
+            scaleFactor: 0.92,
+            child: IconButton(
+              icon: Icon(Icons.arrow_back,
+                  size: 20, color: context.colors.textSecondary),
+              onPressed: () => Navigator.pop(context),
+            )),
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -58,14 +60,15 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
         ),
         actions: [
           PressFeedback(
-            scaleFactor: 0.92,
-            child: IconButton(
-            icon: Icon(Icons.bookmark_add_outlined, size: 20, color: context.colors.textSecondary),
-            onPressed: () {
-              _pdfViewerKey.currentState?.openBookmarkView();
-            },
-            tooltip: 'Bookmarks',
-          )),
+              scaleFactor: 0.92,
+              child: IconButton(
+                icon: Icon(Icons.bookmark_add_outlined,
+                    size: 20, color: context.colors.textSecondary),
+                onPressed: () {
+                  _pdfViewerKey.currentState?.openBookmarkView();
+                },
+                tooltip: 'Bookmarks',
+              )),
         ],
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(1),
@@ -75,29 +78,34 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
       body: Stack(
         children: [
           if (!_hasError)
-            SfPdfViewer.network(
-              widget.url,
-              key: _pdfViewerKey,
-              canShowScrollHead: false,
-              canShowScrollStatus: false,
-              onDocumentLoaded: (PdfDocumentLoadedDetails details) {
-                setState(() {
-                  _isLoading = false;
-                });
-              },
-              onDocumentLoadFailed: (PdfDocumentLoadFailedDetails details) {
-                setState(() {
-                  _isLoading = false;
-                  _hasError = true;
-                });
-              },
+            Opacity(
+              opacity: _isLoading ? 0.0 : 1.0,
+              child: SfPdfViewer.network(
+                widget.url,
+                key: _pdfViewerKey,
+                canShowScrollHead: false,
+                canShowScrollStatus: false,
+                canShowPageLoadingIndicator: false,
+                onDocumentLoaded: (PdfDocumentLoadedDetails details) {
+                  if (mounted) {
+                    setState(() {
+                      _isLoading = false;
+                    });
+                  }
+                },
+                onDocumentLoadFailed: (PdfDocumentLoadFailedDetails details) {
+                  if (mounted) {
+                    setState(() {
+                      _isLoading = false;
+                      _hasError = true;
+                    });
+                  }
+                },
+              ),
             ),
           if (_isLoading)
-            Center(
-              child: CircularProgressIndicator(
-                color: context.colors.accent,
-                strokeWidth: 2,
-              ),
+            const Center(
+              child: BlobLoader(),
             ),
           if (_hasError)
             Center(
@@ -106,7 +114,8 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    Icon(Icons.broken_image_outlined, size: 48, color: context.colors.textMuted),
+                    Icon(Icons.broken_image_outlined,
+                        size: 48, color: context.colors.textMuted),
                     const SizedBox(height: 16),
                     Text(
                       'PDF tidak dapat dimuat langsung',
@@ -130,7 +139,8 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
                       onPressed: () async {
                         final uri = Uri.parse(widget.url);
                         if (await canLaunchUrl(uri)) {
-                          await launchUrl(uri, mode: LaunchMode.externalApplication);
+                          await launchUrl(uri,
+                              mode: LaunchMode.externalApplication);
                         }
                       },
                       icon: const Icon(Icons.open_in_browser, size: 18),
@@ -143,7 +153,8 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
                       style: ElevatedButton.styleFrom(
                         backgroundColor: context.colors.accent,
                         foregroundColor: context.colors.surface0,
-                        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 24, vertical: 12),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(8),
                         ),

@@ -730,7 +730,9 @@ void main() {
       expect(selectableFinder, findsOneWidget);
       expect(find.text('Menulis respons...'), findsOneWidget);
       expect(find.byType(CircularProgressIndicator), findsOneWidget);
-      // Tombol simpan insight tidak boleh muncul saat streaming
+      // Toolbar aksi dan tombol simpan insight tidak boleh muncul saat streaming
+      expect(find.byTooltip('Simpan insight ke Catatan'), findsNothing);
+      expect(find.byIcon(Icons.bookmark_add_outlined), findsNothing);
       expect(find.text('Simpan Insight'), findsNothing);
     });
 
@@ -774,7 +776,10 @@ void main() {
       );
       expect(selectableFinder, findsOneWidget);
       expect(find.text('Menulis respons...'), findsNothing);
-      expect(find.text('Simpan Insight'), findsOneWidget);
+      expect(find.byTooltip('Simpan insight ke Catatan'), findsOneWidget);
+      expect(find.byIcon(Icons.bookmark_add_outlined), findsOneWidget);
+      expect(find.byTooltip('Salin jawaban'), findsOneWidget);
+      expect(find.byTooltip('Bagikan jawaban'), findsOneWidget);
     });
 
     testWidgets(

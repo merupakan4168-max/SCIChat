@@ -85,39 +85,51 @@ class SourceBadge extends StatelessWidget {
   Widget build(BuildContext context) {
     if (source.trim().isEmpty) return const SizedBox.shrink();
 
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-      decoration: BoxDecoration(
-        color: context.colors.accentFaint,
-        borderRadius: BorderRadius.circular(4),
-        border: Border.all(
-          color: context.colors.accentDim.withValues(alpha: 0.35),
-          width: 0.8,
-        ),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(
-            iconForSource(source),
-            size: 10,
-            color: context.colors.accent,
-          ),
-          const SizedBox(width: 4),
-          ConstrainedBox(
-            constraints: BoxConstraints(maxWidth: maxWidth),
-            child: Text(
-              source,
-              style: context.typography.labelSmall?.copyWith(
-                color: context.colors.accent,
-                fontSize: 10,
-                fontWeight: FontWeight.w600,
-              ),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
+    return Tooltip(
+      message: 'Sumber literatur: $source',
+      waitDuration: const Duration(milliseconds: 500),
+      excludeFromSemantics: true,
+      child: Semantics(
+        label: 'Sumber literatur: $source',
+        readOnly: true,
+        excludeSemantics: true,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+          decoration: BoxDecoration(
+            color: context.colors.accentFaint,
+            borderRadius: BorderRadius.circular(4),
+            border: Border.all(
+              color: context.colors.accentDim.withValues(alpha: 0.35),
+              width: 0.8,
             ),
           ),
-        ],
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ExcludeSemantics(
+                child: Icon(
+                  iconForSource(source),
+                  size: 10,
+                  color: context.colors.accent,
+                ),
+              ),
+              const SizedBox(width: 4),
+              ConstrainedBox(
+                constraints: BoxConstraints(maxWidth: maxWidth),
+                child: Text(
+                  source,
+                  style: context.typography.labelSmall?.copyWith(
+                    color: context.colors.accent,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w600,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

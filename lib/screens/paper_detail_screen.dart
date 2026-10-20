@@ -14,7 +14,10 @@ import '../widgets/source_badge.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import '../widgets/paper_figures.dart';
 import '../widgets/chat_bubble.dart';
+import '../widgets/summary_skeleton.dart';
 import '../services/search_service.dart';
+import '../utils/follow_up_parser.dart';
+import '../utils/text_utils.dart';
 
 import 'package:markdown/markdown.dart' as md;
 
@@ -382,11 +385,14 @@ class _PaperDetailScreenState extends State<PaperDetailScreen> {
             ),
             const SizedBox(height: 10),
             MarkdownBody(
-              data: _showTranslation && _translatedSummary != null
-                  ? SearchService.normalizeOpenAlexAbstract(_translatedSummary!)
-                  : (paper.isOpenAlex
-                      ? SearchService.normalizeOpenAlexAbstract(paper.summary)
-                      : paper.summary),
+              data: normalizeAbstractMath(
+                _showTranslation && _translatedSummary != null
+                    ? SearchService.normalizeOpenAlexAbstract(
+                        _translatedSummary!)
+                    : (paper.isOpenAlex
+                        ? SearchService.normalizeOpenAlexAbstract(paper.summary)
+                        : paper.summary),
+              ),
               selectable: true,
               builders: {
                 'latex': CustomLatexElementBuilder(context),
@@ -802,6 +808,7 @@ class _SummarizeSheetState extends State<_SummarizeSheet> {
   String? _summary;
   bool _loading = true;
   String? _error;
+  bool _isSaving = false;
 
   @override
   void initState() {
@@ -812,11 +819,14 @@ class _SummarizeSheetState extends State<_SummarizeSheet> {
   Future<void> _load() async {
     try {
       final s = await widget.provider.summarizePaper(widget.paper);
+      if (!mounted) return;
+      final clean = s != null ? FollowUpParser.parse(s).cleanContent : null;
       setState(() {
-        _summary = s;
+        _summary = clean;
         _loading = false;
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _error = e.toString();
         _loading = false;
@@ -855,13 +865,107 @@ class _SummarizeSheetState extends State<_SummarizeSheet> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    'AI Summary',
-                    style: GoogleFonts.playfairDisplay(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w700,
-                      color: context.colors.textPrimary,
-                    ),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        'AI Summary',
+                        style: GoogleFonts.playfairDisplay(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w700,
+                          color: context.colors.textPrimary,
+                        ),
+                      ),
+                      ListenableBuilder(
+                        listenable: widget.provider,
+                        builder: (context, _) {
+                          final isSaved = widget.provider
+                              .isPaperSummarySaved(widget.paper.id);
+                          final canSave = !_loading &&
+                              !_isSaving &&
+                              _error == null &&
+                              _summary != null &&
+                              _summary!.trim().isNotEmpty &&
+                              !_summary!.startsWith('Failed to summarize:');
+
+                          return PressFeedback(
+                            scaleFactor: 0.92,
+                            child: IconButton(
+                              icon: Icon(
+                                isSaved
+                                    ? Icons.bookmark
+                                    : Icons.bookmark_add_outlined,
+                                size: 22,
+                                color: isSaved
+                                    ? context.colors.accent
+                                    : (canSave
+                                        ? context.colors.textMuted
+                                        : context.colors.textMuted
+                                            .withValues(alpha: 0.3)),
+                              ),
+                              tooltip: isSaved
+                                  ? 'Tersimpan di Catatan'
+                                  : 'Simpan ke Catatan',
+                              onPressed: (canSave && !isSaved)
+                                  ? () async {
+                                      setState(() => _isSaving = true);
+                                      HapticFeedback.lightImpact();
+                                      final messenger =
+                                          ScaffoldMessenger.of(context);
+                                      final accentColor = context.colors.accent;
+
+                                      final cleanSummary =
+                                          FollowUpParser.parse(_summary!)
+                                              .cleanContent;
+                                      final success = await widget.provider
+                                          .savePaperSummary(
+                                        paper: widget.paper,
+                                        summary: cleanSummary,
+                                      );
+
+                                      if (!mounted) return;
+                                      setState(() => _isSaving = false);
+
+                                      if (success) {
+                                        messenger.showSnackBar(
+                                          SnackBar(
+                                            content: const Text(
+                                              'Ringkasan berhasil disimpan ke Catatan.',
+                                              style: TextStyle(
+                                                  color: Colors.white),
+                                            ),
+                                            backgroundColor: accentColor,
+                                            behavior: SnackBarBehavior.floating,
+                                            duration:
+                                                const Duration(seconds: 2),
+                                          ),
+                                        );
+                                      } else {
+                                        messenger.showSnackBar(
+                                          const SnackBar(
+                                            content: Text(
+                                              'Gagal menyimpan ringkasan ke Catatan.',
+                                              style: TextStyle(
+                                                  color: Colors.white),
+                                            ),
+                                            backgroundColor: Color(0xFFB05050),
+                                            behavior: SnackBarBehavior.floating,
+                                            duration: Duration(seconds: 2),
+                                          ),
+                                        );
+                                      }
+                                    }
+                                  : null,
+                              padding: EdgeInsets.zero,
+                              constraints: const BoxConstraints(
+                                minWidth: 36,
+                                minHeight: 36,
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ],
                   ),
                   const SizedBox(height: 4),
                   Text(
@@ -882,12 +986,7 @@ class _SummarizeSheetState extends State<_SummarizeSheet> {
             ),
             Expanded(
               child: _loading
-                  ? Center(
-                      child: CircularProgressIndicator(
-                        color: context.colors.accent,
-                        strokeWidth: 2,
-                      ),
-                    )
+                  ? SummarySkeleton(controller: controller)
                   : _error != null
                       ? Center(
                           child: Text(
@@ -902,7 +1001,8 @@ class _SummarizeSheetState extends State<_SummarizeSheet> {
                           controller: controller,
                           padding: const EdgeInsets.fromLTRB(20, 16, 20, 32),
                           child: MarkdownBody(
-                            data: _summary ?? '',
+                            data: FollowUpParser.parse(_summary ?? '')
+                                .cleanContent,
                             selectable: true,
                             builders: {
                               'latex': CustomLatexElementBuilder(context),
