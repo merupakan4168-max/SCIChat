@@ -31,7 +31,6 @@ class _FakeStorageService extends StorageService {
   Future<void> saveThemeMode(String mode) async {}
   @override
   Future<List<ArxivPaper>> getFavorites() async => [];
-  @override
   Future<void> saveFavorites(List<ArxivPaper> papers) async {}
   @override
   Future<List<ChatSession>> getChatSessions() async => [];

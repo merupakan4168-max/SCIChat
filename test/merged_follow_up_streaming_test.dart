@@ -24,7 +24,6 @@ class _FakeStorageService extends StorageService {
   @override
   Future<List<ChatSession>> getChatSessions() async => _sessions;
 
-  @override
   Future<void> saveChatSession(ChatSession session) async {
     final idx = _sessions.indexWhere((s) => s.id == session.id);
     if (idx != -1) {
@@ -34,7 +33,6 @@ class _FakeStorageService extends StorageService {
     }
   }
 
-  @override
   Future<void> deleteChatSession(String id) async {
     _sessions.removeWhere((s) => s.id == id);
   }
@@ -42,13 +40,11 @@ class _FakeStorageService extends StorageService {
   @override
   Future<List<ArxivPaper>> getFavorites() async => [];
 
-  @override
   Future<void> saveFavorites(List<ArxivPaper> papers) async {}
 
   @override
   Future<List<ResearchNote>> getNotes() async => [];
 
-  @override
   Future<void> saveNotes(List<ResearchNote> notes) async {}
 
   @override
