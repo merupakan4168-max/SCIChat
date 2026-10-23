@@ -62,26 +62,165 @@ class PdfChunk {
       'PdfChunk(id: $id, section: $sectionTitle, page: $pageNumber, offset: $charOffset, len: ${text.length})';
 }
 
+/// Teks yang diekstrak dari satu halaman spesifik dokumen PDF beserta nomor halamannya (1-based).
+class PdfPageText {
+  /// Nomor halaman PDF asli (1-based: 1, 2, 3, ...).
+  final int pageNumber;
+
+  /// Teks yang diekstrak dari halaman ini.
+  final String text;
+
+  const PdfPageText({
+    required this.pageNumber,
+    required this.text,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'pageNumber': pageNumber,
+        'text': text,
+      };
+
+  factory PdfPageText.fromJson(Map<String, dynamic> json) => PdfPageText(
+        pageNumber: json['pageNumber'] as int,
+        text: json['text'] as String,
+      );
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is PdfPageText &&
+          runtimeType == other.runtimeType &&
+          pageNumber == other.pageNumber &&
+          text == other.text;
+
+  @override
+  int get hashCode => Object.hash(pageNumber, text);
+
+  @override
+  String toString() => 'PdfPageText(p.$pageNumber, len: ${text.length})';
+}
+
+enum PdfExtractionCompleteness {
+  complete,
+  truncated,
+  unknown,
+}
+
+/// Metadata kelengkapan ekstraksi teks PDF.
+///
+/// Dibuat pada titik tepat saat batas karakter [PdfService] diterapkan, sehingga
+/// pembangun prompt dan retrieval dapat membedakan:
+/// - dokumen yang diekstrak lengkap,
+/// - dokumen yang dipotong oleh batas karakter aplikasi,
+/// - dan dokumen yang kelengkapan ekstraksinya tidak diketahui.
+///
+/// Semua field bersifat read-only. Gunakan factory constructor [PdfExtractionMetadata.complete]
+/// dan [PdfExtractionMetadata.truncated] untuk konstruksi yang eksplisit.
+class PdfExtractionMetadata {
+  /// Panjang teks yang dipertahankan setelah pemotongan (karakter).
+  final int retainedLength;
+
+  /// Panjang teks hasil ekstraksi sebelum pemotongan.
+  /// Bernilai sama dengan [retainedLength] jika tidak ada pemotongan.
+  final int totalExtractedLength;
+
+  /// True jika teks dipotong oleh batas karakter aplikasi.
+  final bool isTruncated;
+
+  /// Status kelengkapan ekstraksi terstruktur.
+  final PdfExtractionCompleteness completeness;
+
+  int get retainedTextLength => retainedLength;
+  int get totalExtractedTextLength => totalExtractedLength;
+
+  /// Metadata untuk teks yang diekstrak secara lengkap tanpa pemotongan.
+  const PdfExtractionMetadata.complete(int textLength)
+      : retainedLength = textLength,
+        totalExtractedLength = textLength,
+        isTruncated = false,
+        completeness = PdfExtractionCompleteness.complete;
+
+  /// Metadata untuk teks yang dipotong oleh batas karakter aplikasi.
+  const PdfExtractionMetadata.truncated({
+    required int retained,
+    required int total,
+  })  : retainedLength = retained,
+        totalExtractedLength = total,
+        isTruncated = true,
+        completeness = PdfExtractionCompleteness.truncated;
+
+  /// Metadata saat status kelengkapan tidak diketahui atau tidak dapat ditentukan.
+  const PdfExtractionMetadata.unknown({
+    int retained = 0,
+    int total = 0,
+  })  : retainedLength = retained,
+        totalExtractedLength = total,
+        isTruncated = false,
+        completeness = PdfExtractionCompleteness.unknown;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is PdfExtractionMetadata &&
+          runtimeType == other.runtimeType &&
+          retainedLength == other.retainedLength &&
+          totalExtractedLength == other.totalExtractedLength &&
+          isTruncated == other.isTruncated &&
+          completeness == other.completeness;
+
+  @override
+  int get hashCode => Object.hash(
+        retainedLength,
+        totalExtractedLength,
+        isTruncated,
+        completeness,
+      );
+
+  @override
+  String toString() =>
+      'PdfExtractionMetadata(retained: $retainedLength, total: $totalExtractedLength, truncated: $isTruncated, status: $completeness)';
+}
+
 class PaperEvidence {
   final EvidenceLevel level;
   final String? extractedText;
   final List<PdfChunk> chunks;
 
+  /// Metadata kelengkapan ekstraksi PDF.
+  /// Bernilai null jika level bukan [EvidenceLevel.fullText],
+  /// jika paper tidak memiliki full text, atau untuk objek legacy.
+  final PdfExtractionMetadata? extractionMetadata;
+
   const PaperEvidence({
     required this.level,
     this.extractedText,
     this.chunks = const [],
+    this.extractionMetadata,
   });
+
+  PdfExtractionCompleteness get extractionCompleteness =>
+      extractionMetadata?.completeness ?? PdfExtractionCompleteness.unknown;
+
+  bool get isTruncated => extractionMetadata?.isTruncated ?? false;
+
+  int get retainedTextLength =>
+      extractionMetadata?.retainedTextLength ?? (extractedText?.length ?? 0);
+
+  int get totalExtractedTextLength =>
+      extractionMetadata?.totalExtractedTextLength ??
+      (extractedText?.length ?? 0);
 
   PaperEvidence copyWith({
     EvidenceLevel? level,
     String? extractedText,
     List<PdfChunk>? chunks,
+    PdfExtractionMetadata? extractionMetadata,
   }) =>
       PaperEvidence(
         level: level ?? this.level,
         extractedText: extractedText ?? this.extractedText,
         chunks: chunks ?? this.chunks,
+        extractionMetadata: extractionMetadata ?? this.extractionMetadata,
       );
 
   @override
@@ -91,14 +230,20 @@ class PaperEvidence {
           runtimeType == other.runtimeType &&
           level == other.level &&
           extractedText == other.extractedText &&
-          listEquals(chunks, other.chunks);
+          listEquals(chunks, other.chunks) &&
+          extractionMetadata == other.extractionMetadata;
 
   @override
-  int get hashCode => Object.hash(level, extractedText, Object.hashAll(chunks));
+  int get hashCode => Object.hash(
+        level,
+        extractedText,
+        Object.hashAll(chunks),
+        extractionMetadata,
+      );
 
   @override
   String toString() =>
-      'PaperEvidence(level: $level, textLen: ${extractedText?.length ?? 0}, chunks: ${chunks.length})';
+      'PaperEvidence(level: $level, textLen: ${extractedText?.length ?? 0}, chunks: ${chunks.length}, completeness: $extractionCompleteness)';
 }
 
 class ArxivPaper {
@@ -189,6 +334,8 @@ class ArxivPaper {
         s.contains('no abstract available') ||
         s.contains('abstrak tidak tersedia') ||
         s.contains('tidak ada deskripsi') ||
+        s.contains('a local pdf file') ||
+        s.contains('local pdf file') ||
         s == 'abstract' ||
         s == 'none' ||
         s == 'n/a' ||
@@ -199,6 +346,11 @@ class ArxivPaper {
   }
 
   bool get hasUsableAbstract => isAbstractUsable(summary);
+
+  bool get isLocal =>
+      pdfUrl.startsWith('file://') ||
+      id.startsWith('local_') ||
+      categories.contains('Local');
 
   bool get isInternetArchive =>
       absUrl.contains('archive.org') ||

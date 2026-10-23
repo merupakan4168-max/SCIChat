@@ -106,8 +106,13 @@ class SciChatProvider extends ChangeNotifier {
   List<ArxivPaper> _lastSearchResults = [];
   List<ArxivPaper> _favorites = [];
   /// Batas karakter teks hasil ekstraksi PDF untuk konteks percakapan Tanya Paper.
-  /// Menjaga konsistensi token prompt dan mencegah context window overflow.
-  static const int kChatEvidenceMaxChars = 8000;
+  /// Ditetapkan 48.000 karakter (~12-14 halaman paper ilmiah) agar mencakup
+  /// seluruh seksi kunci: Abstrak, Metodologi, Arsitektur Model, Dataset,
+  /// Eksperimen, Hasil, dan Kesimpulan pada makalah konferensi (e.g. EMNLP/ACL).
+  ///
+  /// Batas ekstraksi ini terpisah dari jumlah chunk dan batas konteks LLM
+  /// (yang dibatasi ketat melalui LexicalRetriever: maxChunks=3, maxChars=5000).
+  static const int kChatEvidenceMaxChars = 48000;
 
   /// Batas karakter teks hasil ekstraksi PDF untuk ringkasan paper menyeluruh.
   static const int kSummaryEvidenceMaxChars = 40000;
@@ -173,7 +178,7 @@ class SciChatProvider extends ChangeNotifier {
     final session = activeSession;
     if (session == null) return 'Obrolan Baru';
     final title = session.title.trim();
-    if (title.isEmpty || title == 'New Chat') {
+    if (title.isEmpty || title == 'New Chat' || title == 'Obrolan Baru') {
       return 'Obrolan Baru';
     }
     return title;
@@ -186,6 +191,11 @@ class SciChatProvider extends ChangeNotifier {
   bool get isLoadingTrending => _isLoadingTrending;
   List<ArxivPaper> get activeContexts => _activeContexts;
   Map<String, PaperEvidence> get contextEvidence => _contextEvidence;
+
+  /// Mengambil bukti dokumen PDF untuk [paperId] dari konteks aktif atau cache LRU.
+  PaperEvidence? getEvidence(String paperId) =>
+      _contextEvidence[paperId] ?? _paperEvidenceCache[paperId];
+
   @visibleForTesting
   Map<String, PaperEvidence> get paperEvidenceCache => _paperEvidenceCache;
   @visibleForTesting
@@ -309,6 +319,9 @@ class SciChatProvider extends ChangeNotifier {
     if (s.contains('tidak ada abstrak') ||
         s.contains('no abstract available') ||
         s.contains('abstrak tidak tersedia') ||
+        s.contains('tidak ada deskripsi') ||
+        s.contains('a local pdf file') ||
+        s.contains('local pdf file') ||
         s == 'abstract' ||
         s == 'none' ||
         s == 'n/a' ||
@@ -316,7 +329,7 @@ class SciChatProvider extends ChangeNotifier {
       return false;
     }
 
-    return true;
+    return s.length >= 20;
   }
 
   bool isAbstractValid(String summary) => checkAbstractValid(summary);
@@ -345,6 +358,21 @@ class SciChatProvider extends ChangeNotifier {
   }
 
   bool isTextUsable(String? text) => checkTextUsable(text);
+
+  /// Mencari chunk abstrak yang teridentifikasi secara andal dari daftar [chunks].
+  /// Mengembalikan null jika tidak ada chunk yang berlabel seksi Abstract atau jika
+  /// teks terlalu pendek (< 40 karakter). Tidak memperlakukan chunk pertama sembarangan sebagai abstrak.
+  @visibleForTesting
+  static PdfChunk? findReliableAbstractChunk(List<PdfChunk> chunks) {
+    if (chunks.isEmpty) return null;
+    for (final c in chunks) {
+      final s = c.sectionTitle.trim().toLowerCase();
+      if (s == 'abstract' && c.text.trim().length >= 40) {
+        return c;
+      }
+    }
+    return null;
+  }
 
   /// Membangun cache / in-flight key yang stabil untuk paper dan batas karakter tertentu.
   /// Mengutamakan ID paper atau URL PDF yang stabil, menghindari tabrakan judul,
@@ -405,8 +433,13 @@ class SciChatProvider extends ChangeNotifier {
     }
     final existing = _contextEvidence[paper.id];
     if (existing != null && existing.level == EvidenceLevel.fullText) {
-      _cacheEvidence(key, existing);
-      return existing;
+      final isStaleTruncation = existing.extractionMetadata != null &&
+          existing.extractionMetadata!.isTruncated &&
+          existing.extractionMetadata!.retainedLength < maxChars;
+      if (!isStaleTruncation) {
+        _cacheEvidence(key, existing);
+        return existing;
+      }
     }
 
     // 2. Jika tidak ada URL PDF, evaluasi abstrak langsung (kondisi deterministik paper tanpa PDF)
@@ -450,23 +483,36 @@ class SciChatProvider extends ChangeNotifier {
     required int maxChars,
   }) async {
     try {
-      String? text;
-      if (paper.pdfUrl.startsWith('file://')) {
-        final file = dart_io.File(paper.pdfUrl.replaceFirst('file://', ''));
-        final bytes = await file.readAsBytes();
-        text = await _pdf.extractTextFromBytes(bytes, maxChars: maxChars);
+      PdfExtractionResult? extractionResult;
+      if (paper.isLocal || paper.pdfUrl.startsWith('file://')) {
+        final path = paper.pdfUrl.startsWith('file://')
+            ? paper.pdfUrl.replaceFirst('file://', '')
+            : paper.pdfUrl;
+        final file = dart_io.File(path);
+        if (await file.exists()) {
+          final bytes = await file.readAsBytes();
+          extractionResult =
+              await _pdf.extractBytesWithMetadata(bytes, maxChars: maxChars);
+        } else {
+          debugPrint('[EVIDENCE_DEBUG] Local file not found: $path');
+        }
       } else {
-        text = await _pdf
-            .extractTextFromUrl(paper.pdfUrl, maxChars: maxChars)
+        extractionResult = await _pdf
+            .extractUrlWithMetadata(paper.pdfUrl, maxChars: maxChars)
             .timeout(const Duration(seconds: 20));
       }
 
+      final text = extractionResult?.text;
       if (isTextUsable(text)) {
-        final chunks = PdfChunker.chunkText(text);
+        final pages = extractionResult?.pages ?? const [];
+        final chunks = pages.isNotEmpty
+            ? PdfChunker.chunkPages(pages)
+            : PdfChunker.chunkText(text!);
         return PaperEvidence(
           level: EvidenceLevel.fullText,
           extractedText: text,
           chunks: chunks,
+          extractionMetadata: extractionResult?.metadata,
         );
       } else {
         if (isAbstractValid(paper.summary)) {
@@ -486,6 +532,162 @@ class SciChatProvider extends ChangeNotifier {
     }
   }
 
+  /// Memilih potongan teks ([PdfChunk]) cadangan secara cerdas ketika pencarian
+  /// leksikal BM25 tidak menemukan kecocokan langsung ([FallbackReason.noMatches]).
+  ///
+  /// Memprioritaskan bagian dokumen yang relevan dengan intensi pertanyaan pengguna
+  /// (misal: bagian Methodology/Architecture untuk pertanyaan tentang metode/arsitektur,
+  /// atau Experiments/Results untuk pertanyaan tentang hasil/evaluasi).
+  /// Jika tidak ada kecocokan seksi khusus, mengambil sampel representatif (awal, tengah, akhir).
+  @visibleForTesting
+  static List<PdfChunk> selectFallbackChunks({
+    required List<PdfChunk> chunks,
+    required String userQuery,
+    int maxChunks = 2,
+    int maxChars = 3000,
+  }) {
+    if (chunks.isEmpty) return const [];
+    final trimmedQuery = userQuery.trim().toLowerCase();
+
+    // 1. Identifikasi seksi target berdasarkan intensi kueri pengguna
+    final targetSections = <String>[];
+    if (trimmedQuery.contains('metod') ||
+        trimmedQuery.contains('method') ||
+        trimmedQuery.contains('approach') ||
+        trimmedQuery.contains('arsitektur') ||
+        trimmedQuery.contains('architecture') ||
+        trimmedQuery.contains('model') ||
+        trimmedQuery.contains('algoritma') ||
+        trimmedQuery.contains('algorithm') ||
+        trimmedQuery.contains('cara kerja') ||
+        trimmedQuery.contains('sistem') ||
+        trimmedQuery.contains('system')) {
+      targetSections.addAll(['methodology', 'methods', 'model architecture', 'approach', 'system model', 'proposed method']);
+    }
+    if (trimmedQuery.contains('dataset') ||
+        trimmedQuery.contains('data') ||
+        trimmedQuery.contains('korpus') ||
+        trimmedQuery.contains('corpus') ||
+        trimmedQuery.contains('benchmark') ||
+        trimmedQuery.contains('latih') ||
+        trimmedQuery.contains('train') ||
+        trimmedQuery.contains('setup')) {
+      targetSections.addAll(['experiments', 'experimental setup', 'methodology', 'dataset']);
+    }
+    if (trimmedQuery.contains('hasil') ||
+        trimmedQuery.contains('result') ||
+        trimmedQuery.contains('temuan') ||
+        trimmedQuery.contains('findings') ||
+        trimmedQuery.contains('akurasi') ||
+        trimmedQuery.contains('accuracy') ||
+        trimmedQuery.contains('performa') ||
+        trimmedQuery.contains('performance') ||
+        trimmedQuery.contains('f1') ||
+        trimmedQuery.contains('skor') ||
+        trimmedQuery.contains('score') ||
+        trimmedQuery.contains('evalua')) {
+      targetSections.addAll(['results', 'experiments', 'evaluation']);
+    }
+    if (trimmedQuery.contains('kesimpulan') ||
+        trimmedQuery.contains('conclusion') ||
+        trimmedQuery.contains('penutup') ||
+        trimmedQuery.contains('ringkasan') ||
+        trimmedQuery.contains('summary')) {
+      targetSections.addAll(['conclusion', 'conclusions', 'discussion']);
+    }
+    if (trimmedQuery.contains('diskusi') ||
+        trimmedQuery.contains('discussion') ||
+        trimmedQuery.contains('limitasi') ||
+        trimmedQuery.contains('limitation') ||
+        trimmedQuery.contains('kelemahan') ||
+        trimmedQuery.contains('keterbatasan')) {
+      targetSections.addAll(['discussion', 'limitations']);
+    }
+    if (trimmedQuery.contains('abstrak') ||
+        trimmedQuery.contains('abstract') ||
+        trimmedQuery.contains('latar') ||
+        trimmedQuery.contains('background') ||
+        trimmedQuery.contains('pendahuluan') ||
+        trimmedQuery.contains('introduction')) {
+      targetSections.addAll(['abstract', 'introduction', 'background']);
+    }
+
+    final candidateChunks = <PdfChunk>[];
+    if (targetSections.isNotEmpty) {
+      for (final chunk in chunks) {
+        final sLower = chunk.sectionTitle.toLowerCase();
+        if (targetSections.any((target) => sLower.contains(target))) {
+          candidateChunks.add(chunk);
+        }
+      }
+    }
+
+    // Jika tidak ada chunk seksi yang cocok, gunakan seleksi representatif (awal, tengah, akhir)
+    if (candidateChunks.isEmpty) {
+      if (chunks.length <= maxChunks) {
+        candidateChunks.addAll(chunks);
+      } else {
+        candidateChunks.add(chunks.first);
+        final midIdx = chunks.length ~/ 2;
+        if (!candidateChunks.contains(chunks[midIdx])) {
+          candidateChunks.add(chunks[midIdx]);
+        }
+        if (candidateChunks.length < maxChunks && chunks.length > 2) {
+          final lateIdx = (chunks.length * 3) ~/ 4;
+          if (!candidateChunks.contains(chunks[lateIdx])) {
+            candidateChunks.add(chunks[lateIdx]);
+          }
+        }
+      }
+    }
+
+    // Batasi maxChunks dan maxChars secara ketat dengan memprioritaskan diversitas seksi
+    // Putaran 1: Ambil 1 chunk pertama dari tiap seksi unik agar multi-topik terwakili
+    // Putaran 2: Jika kuota belum penuh, tambahkan chunk berikutnya dari kandidat yang sama
+    final selected = <PdfChunk>[];
+    final seenSections = <String>{};
+    int accumulatedChars = 0;
+
+    void tryAddChunk(PdfChunk chunk) {
+      if (selected.length >= maxChunks || accumulatedChars >= maxChars) return;
+      if (selected.any((s) =>
+          s.id == chunk.id ||
+          (s.charOffset == chunk.charOffset && s.text == chunk.text))) {
+        return;
+      }
+
+      final remaining = maxChars - accumulatedChars;
+      if (chunk.text.length <= remaining) {
+        selected.add(chunk);
+        accumulatedChars += chunk.text.length;
+        seenSections.add(chunk.sectionTitle.toLowerCase());
+      } else if (selected.isEmpty && remaining > 0) {
+        selected.add(chunk.copyWith(text: chunk.text.substring(0, remaining)));
+        accumulatedChars += remaining;
+        seenSections.add(chunk.sectionTitle.toLowerCase());
+      }
+    }
+
+    // Putaran 1: Diversitas lintas seksi berbeda
+    for (final chunk in candidateChunks) {
+      if (selected.length >= maxChunks || accumulatedChars >= maxChars) break;
+      final normSection = chunk.sectionTitle.toLowerCase();
+      if (!seenSections.contains(normSection)) {
+        tryAddChunk(chunk);
+      }
+    }
+
+    // Putaran 2: Isi sisa kuota jika masih muat
+    if (selected.length < maxChunks && accumulatedChars < maxChars) {
+      for (final chunk in candidateChunks) {
+        if (selected.length >= maxChunks || accumulatedChars >= maxChars) break;
+        tryAddChunk(chunk);
+      }
+    }
+
+    return selected;
+  }
+
   /// Membangun prompt Tanya Paper untuk satu paper aktif menggunakan retrieval konteks lokal berbasis relevansi pertanyaan.
   @visibleForTesting
   static String buildSinglePaperContextPrompt({
@@ -498,6 +700,9 @@ class SciChatProvider extends ChangeNotifier {
     buffer.writeln('ID: ${paper.id}');
     if (paper.doi != null && paper.doi!.trim().isNotEmpty) {
       buffer.writeln('DOI: ${paper.doi!.trim()}');
+    }
+    if (paper.isLocal) {
+      buffer.writeln('Sumber: Berkas PDF Lokal');
     }
 
     final hasValidAbstract = checkAbstractValid(paper.summary);
@@ -519,8 +724,15 @@ class SciChatProvider extends ChangeNotifier {
     if (evidence.level == EvidenceLevel.noUsableText) {
       buffer.writeln(
           'Status Bukti: Tidak ada teks yang dapat digunakan (No Usable Text).');
-      buffer.writeln(
-          'Peringatan: Dokumen tidak memiliki teks maupun abstrak yang valid. Jangan membuat klaim substantif mengenai isi paper ini.');
+      if (paper.isLocal) {
+        buffer.writeln(
+            'Keterangan: Dokumen PDF lokal (${paper.title}) tidak memiliki teks yang dapat diekstrak (kemungkinan dokumen berupa scan gambar tanpa OCR atau berkas terproteksi).');
+        buffer.writeln(
+            'Peringatan: JANGAN mengarang isi dokumen atau memberikan klaim spekulatif. Nyatakan secara transparan bahwa teks dokumen tidak dapat dibaca.');
+      } else {
+        buffer.writeln(
+            'Peringatan: Dokumen tidak memiliki teks maupun abstrak yang valid. Jangan membuat klaim substantif mengenai isi paper ini.');
+      }
       buffer.writeln();
       buffer.writeln('Pertanyaan: $userQuery');
       return buffer.toString();
@@ -537,6 +749,20 @@ class SciChatProvider extends ChangeNotifier {
     }
 
     // EvidenceLevel.fullText
+    final meta = evidence.extractionMetadata;
+    if (meta != null && meta.isTruncated) {
+      buffer.writeln(
+          'Kelengkapan Ekstraksi: Terpotong (${meta.retainedLength} dari ${meta.totalExtractedLength} karakter diekstrak karena batas kapasitas).');
+      buffer.writeln(
+          'Perhatian Pemotongan: Sebagian isi dokumen (terutama seksi akhir/lampiran) tidak termuat. JANGAN mengklaim telah membaca bagian yang terpotong dan JANGAN menyimpulkan ketiadaan informasi jika topik tersebut mungkin berada pada bagian dokumen yang belum termuat.');
+      buffer.writeln();
+    } else if (meta != null &&
+        meta.completeness == PdfExtractionCompleteness.complete) {
+      buffer.writeln(
+          'Kelengkapan Ekstraksi: Dokumen Lengkap (${meta.totalExtractedLength} karakter).');
+      buffer.writeln();
+    }
+
     final chunks = evidence.chunks.isNotEmpty
         ? evidence.chunks
         : (evidence.extractedText != null &&
@@ -560,9 +786,28 @@ class SciChatProvider extends ChangeNotifier {
     final retrieval = LexicalRetriever.retrieve(
       chunks: chunks,
       query: userQuery,
-      maxChunks: 3,
-      maxChars: 5000,
+      maxChunks: 4,
+      maxChars: 6000,
     );
+
+    // Fix B (Phase 4D.9): Jika metadata summary tidak tersedia (misal PDF lokal),
+    // gunakan chunk abstrak yang teridentifikasi secara andal dari ekstraksi PDF
+    // sebagai jangkar konteks, asalkan belum termasuk dalam potongan retrieval terpilih.
+    if (!hasValidAbstract && chunks.isNotEmpty) {
+      final extractedAbstract = findReliableAbstractChunk(chunks);
+      if (extractedAbstract != null) {
+        final isAlreadyInRetrieval = retrieval.scoredChunks.any(
+          (sc) =>
+              sc.chunk.id == extractedAbstract.id ||
+              sc.chunk.charOffset == extractedAbstract.charOffset,
+        );
+        if (!isAlreadyInRetrieval) {
+          buffer.writeln('Abstrak (Jangkar Konteks - Ekstraksi PDF):');
+          buffer.writeln(extractedAbstract.text.trim());
+          buffer.writeln();
+        }
+      }
+    }
 
     if (!retrieval.isFallback && retrieval.scoredChunks.isNotEmpty) {
       buffer.writeln(
@@ -575,12 +820,50 @@ class SciChatProvider extends ChangeNotifier {
         buffer.writeln(sc.chunk.text);
         buffer.writeln();
       }
+      buffer.writeln(
+          'Petunjuk: Jawab berdasarkan kutipan relevan di atas dan abstrak. Bedakan antara informasi yang tidak ditemukan pada kutipan yang diambil vs informasi yang benar-benar tidak ada dalam dokumen.');
+      buffer.writeln(
+          'Format Sitasi Halaman: Bila mengutip temuan spesifik dari kutipan di atas yang memiliki nomor halaman, cantumkan sitasi nomor halaman dalam format [Halaman X] (misal: [Halaman 4] atau [Hal. 4]). Jangan mengarang nomor halaman yang tidak tercantum pada kutipan di atas.');
+      buffer.writeln(
+          'Aturan Sitasi: Jika menyertakan nama bagian/seksi atau tabel, selalu sertakan nomor halamannya seperti [Seksi 4.4, Halaman 4] atau [Tabel 2, Halaman 4]. Dilarang menulis sitasi tanpa nomor halaman seperti [Kutipan: Seksi 4.4, Tabel 2].');
+      buffer.writeln();
     } else if (retrieval.fallbackReason == FallbackReason.noMatches) {
       buffer.writeln(
           'Status Bukti: Tidak ditemukan kutipan spesifik dalam dokumen yang cocok dengan kata kunci pertanyaan.');
       buffer.writeln(
-          'Peringatan: Jangan mengarang bukti atau klaim yang tidak ada dalam teks. Gunakan abstrak di atas sebagai acuan umum, dan nyatakan bahwa rincian spesifik tidak ditemukan dalam dokumen.');
+          'Peringatan: Jangan mengarang bukti atau klaim yang tidak ada dalam teks. Gunakan abstrak di atas sebagai acuan umum.');
+      buffer.writeln(
+          'Catatan Konteks: Cuplikan dokumen di bawah ini disediakan sebagai konteks cadangan (fallback excerpts), bukan representasi lengkap dari seluruh isi dokumen PDF.');
+      buffer.writeln('Petunjuk Penjawab:');
+      buffer.writeln(
+          '1. Jika cuplikan cadangan atau abstrak memuat bukti yang relevan dengan pertanyaan, jawablah hanya berdasarkan bukti tersebut.');
+      buffer.writeln(
+          '2. Jika detail yang diminta tidak didukung oleh cuplikan yang tersedia, nyatakan bahwa detail tersebut belum dapat dipastikan dari cuplikan teks yang tersedia untuk model saat ini.');
+      buffer.writeln(
+          '3. JANGAN menyimpulkan atau mengklaim bahwa informasi tersebut tidak ada di seluruh dokumen/makalah, kecuali seksi relevan yang lengkap telah benar-benar diperiksa.');
+      buffer.writeln(
+          '4. JANGAN mengarang nomor halaman, kutipan, dataset, metrik, metode, atau hasil eksperimen.');
       buffer.writeln();
+
+      // Fallback cerdas: sediakan cuplikan dokumen terstruktur sebagai konteks cadangan
+      final fallbackChunks = selectFallbackChunks(
+        chunks: chunks,
+        userQuery: userQuery,
+        maxChunks: 3,
+        maxChars: 3600,
+      );
+      if (fallbackChunks.isNotEmpty) {
+        buffer.writeln(
+            'Konteks Cadangan Dokumen (Relevansi leksikal spesifik belum terverifikasi):');
+        for (final sc in fallbackChunks) {
+          final pNum = sc.pageNumber != PdfChunk.kUnknownPage
+              ? ', Halaman: ${sc.pageNumber}'
+              : '';
+          buffer.writeln('[Konteks Cadangan - Bagian: ${sc.sectionTitle}$pNum]');
+          buffer.writeln(sc.text);
+          buffer.writeln();
+        }
+      }
     } else {
       // emptyQuery / stopwordsOnly
       buffer.writeln(
@@ -693,6 +976,21 @@ class SciChatProvider extends ChangeNotifier {
 
       if (checkAbstractValid(p.summary)) {
         buffer.writeln('Abstrak: ${p.summary.trim()}');
+      } else {
+        final relAbstract = findReliableAbstractChunk(chunks);
+        if (relAbstract != null && !retrieval.scoredChunks.any((sc) => sc.chunk.id == relAbstract.id)) {
+          buffer.writeln('Abstrak (Ekstraksi PDF): ${relAbstract.text.trim()}');
+        }
+      }
+
+      final meta = evidence.extractionMetadata;
+      if (meta != null && meta.isTruncated) {
+        buffer.writeln(
+            'Kelengkapan Ekstraksi: Terpotong (${meta.retainedLength}/${meta.totalExtractedLength} karakter). Jangan menyimpulkan ketiadaan detail pada seksi yang terpotong.');
+      } else if (meta != null &&
+          meta.completeness == PdfExtractionCompleteness.complete) {
+        buffer.writeln(
+            'Kelengkapan Ekstraksi: Lengkap (${meta.totalExtractedLength} karakter).');
       }
 
       if (!retrieval.isFallback && retrieval.scoredChunks.isNotEmpty) {
@@ -710,6 +1008,22 @@ class SciChatProvider extends ChangeNotifier {
             'Status Evidence: Full Text Tersedia (Tidak ditemukan bukti leksikal spesifik yang cocok)');
         buffer.writeln(
             'Catatan: Gunakan abstrak di atas sebagai acuan umum paper ini.');
+        buffer.writeln(
+            'Petunjuk: Cuplikan di bawah adalah konteks cadangan (fallback excerpts), bukan teks lengkap seluruh dokumen. Jawab hanya jika didukung bukti; nyatakan belum dapat dipastikan jika detail tidak ditemukan, dan jangan menyimpulkan absen di seluruh paper.');
+        final fallbackChunks = selectFallbackChunks(
+          chunks: chunks,
+          userQuery: userQuery,
+          maxChunks: 1,
+          maxChars: 1800,
+        );
+        if (fallbackChunks.isNotEmpty) {
+          final sc = fallbackChunks.first;
+          final pNum = sc.pageNumber != PdfChunk.kUnknownPage
+              ? ', Hal: ${sc.pageNumber}'
+              : '';
+          buffer.writeln('[[Konteks Cadangan: ${sc.sectionTitle}$pNum]]');
+          buffer.writeln(sc.text);
+        }
       } else {
         // emptyQuery / stopwordsOnly
         buffer.writeln('Status Evidence: Full Text Tersedia (Konteks Umum)');
@@ -720,6 +1034,11 @@ class SciChatProvider extends ChangeNotifier {
       buffer.writeln();
     }
 
+    buffer.writeln(
+        'Format Sitasi Multi-Paper: Bila mengutip temuan spesifik dari kutipan di atas, sebutkan dokumen dan nomor halaman dalam format [Paper N, Halaman X] (misal: [Paper 1, Halaman 4] atau [Paper 2, Hal. 3]) sesuai nomor urut paper di atas. Jangan mencantumkan nomor halaman tanpa menyebutkan paper sumbernya.');
+    buffer.writeln(
+        'Aturan Sitasi: Jika menyertakan seksi atau tabel, tetap sertakan nomor halamannya seperti [Paper 1, Seksi 4.4, Halaman 4]. Dilarang menulis sitasi tanpa nomor halaman.');
+    buffer.writeln();
     buffer.writeln('Pertanyaan Pengguna: $userQuery');
 
     final fullPrompt = buffer.toString();
