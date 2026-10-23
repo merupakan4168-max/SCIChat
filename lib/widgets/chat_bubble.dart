@@ -17,8 +17,13 @@ import 'package:provider/provider.dart';
 import '../providers/scichat_provider.dart';
 import '../theme/scichat_theme.dart';
 import 'package:flutter/services.dart';
+import 'dart:io' as io;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:url_launcher/url_launcher.dart';
 import 'package:share_plus/share_plus.dart';
+import '../utils/citation_parser.dart';
+import '../screens/pdf_viewer_screen.dart';
+import '../screens/paper_detail_screen.dart';
 import 'paper_card.dart';
 import 'ghost_loader.dart';
 import 'press_feedback.dart';
@@ -36,6 +41,7 @@ class ChatBubble extends StatelessWidget {
   final VoidCallback? onDismissError;
   final VoidCallback? onRegenerate;
   final VoidCallback? onBranch;
+  final void Function(CitationReference citation)? onCitationTap;
 
   const ChatBubble({
     super.key,
@@ -51,30 +57,36 @@ class ChatBubble extends StatelessWidget {
     this.onDismissError,
     this.onRegenerate,
     this.onBranch,
+    this.onCitationTap,
   });
 
   @override
   Widget build(BuildContext context) {
+    Widget bubble;
     if (message.isUser) {
-      return _UserBubble(
+      bubble = _UserBubble(
         key: ValueKey(message.id),
         message: message,
       );
+    } else {
+      bubble = _AssistantBubble(
+        key: ValueKey('assistant_${message.id}'),
+        message: message,
+        isFavorite: isFavorite,
+        onFavoriteToggle: onFavoriteToggle,
+        onPaperTap: onPaperTap,
+        onSummarize: onSummarize,
+        onChatPdf: onChatPdf,
+        onFollowUpTap: onFollowUpTap,
+        onRetry: onRetry,
+        onContinue: onContinue,
+        onDismissError: onDismissError,
+        onRegenerate: onRegenerate,
+        onBranch: onBranch,
+        onCitationTap: onCitationTap,
+      );
     }
-    return _AssistantBubble(
-      message: message,
-      isFavorite: isFavorite,
-      onFavoriteToggle: onFavoriteToggle,
-      onPaperTap: onPaperTap,
-      onSummarize: onSummarize,
-      onChatPdf: onChatPdf,
-      onFollowUpTap: onFollowUpTap,
-      onRetry: onRetry,
-      onContinue: onContinue,
-      onDismissError: onDismissError,
-      onRegenerate: onRegenerate,
-      onBranch: onBranch,
-    );
+    return RepaintBoundary(child: bubble);
   }
 }
 
@@ -89,6 +101,20 @@ class _UserBubble extends StatefulWidget {
 
 class _UserBubbleState extends State<_UserBubble> {
   bool _isExpanded = false;
+
+  /// Cached MessageContent widget instance to avoid re-parsing Markdown when
+  /// parent rebuilds but message content is identical.
+  Widget? _cachedMessageContent;
+  String? _cachedMessageContentText;
+
+  Widget _getMessageContent(String text) {
+    if (_cachedMessageContent != null && _cachedMessageContentText == text) {
+      return _cachedMessageContent!;
+    }
+    _cachedMessageContentText = text;
+    _cachedMessageContent = MessageContent(content: text);
+    return _cachedMessageContent!;
+  }
 
   /// Ambang batas tinggi vertikal saat pesan diringkas (~4 baris teks body).
   static const double _kMaxCollapsedHeight = 114.0;
@@ -141,13 +167,18 @@ class _UserBubbleState extends State<_UserBubble> {
             final bubbleMaxWidth = constraints.maxWidth.isFinite
                 ? math.min(constraints.maxWidth, screenWidth * 0.78)
                 : screenWidth * 0.78;
-            final textMaxWidth = math.max(120.0, bubbleMaxWidth - 32.0);
+            const double bubbleLeftMargin = 40.0;
+            const double bubbleHorizontalPadding = 32.0; // 16 left + 16 right
+            final double bubbleCardMaxWidth =
+                math.max(160.0, bubbleMaxWidth - bubbleLeftMargin);
+            final double textMaxWidth =
+                math.max(120.0, bubbleCardMaxWidth - bubbleHorizontalPadding);
             final isLong = _checkIsLong(context, textMaxWidth);
 
             return ConstrainedBox(
               constraints: BoxConstraints(maxWidth: bubbleMaxWidth),
               child: Container(
-                margin: const EdgeInsets.only(bottom: 16, left: 40),
+                margin: const EdgeInsets.only(bottom: 16, left: bubbleLeftMargin),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.end,
                   mainAxisSize: MainAxisSize.min,
@@ -214,25 +245,25 @@ class _UserBubbleState extends State<_UserBubble> {
                                     ? Duration.zero
                                     : const Duration(milliseconds: 200),
                                 curve: Curves.easeInOut,
-                                alignment: Alignment.topCenter,
+                                alignment: Alignment.topLeft,
                                 child: (isLong && !_isExpanded)
                                     ? SizedBox(
                                         height: _kMaxCollapsedHeight,
+                                        width: double.infinity,
                                         child: ClipRect(
                                           child: OverflowBox(
-                                            alignment: Alignment.topCenter,
-                                            minWidth: textMaxWidth,
+                                            alignment: Alignment.topLeft,
+                                            minWidth: 0.0,
                                             maxWidth: textMaxWidth,
                                             minHeight: 0.0,
                                             maxHeight: double.infinity,
-                                            child: MessageContent(
-                                                content:
-                                                    widget.message.content),
+                                            child: _getMessageContent(
+                                                widget.message.content),
                                           ),
                                         ),
                                       )
-                                    : MessageContent(
-                                        content: widget.message.content),
+                                    : _getMessageContent(
+                                        widget.message.content),
                               ),
                               if (isLong && !_isExpanded)
                                 Positioned(
@@ -340,7 +371,17 @@ class _UserBubbleExpandButton extends StatelessWidget {
 }
 
 // ── Assistant Bubble ─────────────────────────────────────────────────────────
-class _AssistantBubble extends StatelessWidget {
+//
+// Phase 2: _AssistantBubble is a StatefulWidget that owns a render-throttle
+// timer. During streaming, the *displayed* content is updated at most once
+// every [_kRenderIntervalMs] milliseconds regardless of how many network
+// chunks arrive in that window. On terminal states (done / error / cancelled)
+// the buffer is flushed immediately so no token is ever lost.
+//
+// This reduces MarkdownBody re-parse frequency from "once per SSE chunk"
+// (potentially 10-20x per second) to at most ~12x per second, which keeps
+// the UI thread comfortably within a 16 ms frame budget.
+class _AssistantBubble extends StatefulWidget {
   final ChatMessage message;
   final bool Function(String) isFavorite;
   final Function(ArxivPaper) onFavoriteToggle;
@@ -353,8 +394,10 @@ class _AssistantBubble extends StatelessWidget {
   final VoidCallback? onDismissError;
   final VoidCallback? onRegenerate;
   final VoidCallback? onBranch;
+  final void Function(CitationReference citation)? onCitationTap;
 
   const _AssistantBubble({
+    super.key,
     required this.message,
     required this.isFavorite,
     required this.onFavoriteToggle,
@@ -367,10 +410,247 @@ class _AssistantBubble extends StatelessWidget {
     this.onDismissError,
     this.onRegenerate,
     this.onBranch,
+    this.onCitationTap,
   });
 
   @override
+  State<_AssistantBubble> createState() => _AssistantBubbleState();
+}
+
+class _AssistantBubbleState extends State<_AssistantBubble> {
+  /// Maximum interval between MarkdownBody rebuilds during streaming.
+  /// 80 ms ≈ 12 fps render cadence — visually smooth while significantly
+  /// cheaper than rebuilding on every SSE chunk (~20-50 ms apart).
+  static const int _kRenderIntervalMs = 80;
+
+  /// The content string that was last committed to the widget tree.
+  late String _displayedContent;
+
+  /// Latest content received from the provider (may be ahead of displayed).
+  late String _bufferedContent;
+
+  /// Whether the last displayed status was a streaming state.
+  late MessageStatus _displayedStatus;
+
+  /// Timer that triggers the periodic render flush.
+  Timer? _renderTimer;
+
+  /// Cached MessageContent widget instance to avoid re-parsing Markdown
+  /// when parent rebuilds or throttle flushes without content/status change.
+  Widget? _cachedMessageContent;
+  String? _cachedContent;
+  bool? _cachedIsStreaming;
+
+  Widget _getMessageContent(String content, bool isStreaming) {
+    if (_cachedMessageContent != null &&
+        _cachedContent == content &&
+        _cachedIsStreaming == isStreaming) {
+      return _cachedMessageContent!;
+    }
+    _cachedContent = content;
+    _cachedIsStreaming = isStreaming;
+    _cachedMessageContent = MessageContent(
+      content: content,
+      isStreaming: isStreaming,
+      papers: widget.message.papers,
+      validatedCitationPages: widget.message.validatedCitationPages,
+      validatedSectionPages: widget.message.validatedSectionPages,
+      onCitationTap: widget.onCitationTap,
+    );
+    return _cachedMessageContent!;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _displayedContent = widget.message.content;
+    _bufferedContent = widget.message.content;
+    _displayedStatus = widget.message.status;
+    if (widget.message.status == MessageStatus.streaming) {
+      _startRenderTimer();
+    }
+  }
+
+  @override
+  void didUpdateWidget(_AssistantBubble oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final newMsg = widget.message;
+    _bufferedContent = newMsg.content;
+
+    if (oldWidget.message.papers != newMsg.papers ||
+        oldWidget.message.validatedCitationPages !=
+            newMsg.validatedCitationPages ||
+        oldWidget.message.validatedSectionPages !=
+            newMsg.validatedSectionPages ||
+        oldWidget.onCitationTap != widget.onCitationTap) {
+      _cachedMessageContent = null;
+    }
+
+    final wasStreaming = _displayedStatus == MessageStatus.streaming;
+    final isStreaming = newMsg.status == MessageStatus.streaming;
+    final isTerminal = newMsg.status == MessageStatus.done ||
+        newMsg.status == MessageStatus.error;
+
+    if (isStreaming && !wasStreaming) {
+      // Streaming just started — show initial chunk immediately and start throttle timer.
+      _startRenderTimer();
+      setState(() {
+        _displayedContent = newMsg.content;
+        _displayedStatus = newMsg.status;
+      });
+      return;
+    } else if (isTerminal) {
+      // Streaming ended or terminal update — cancel timer and flush buffer immediately.
+      _stopRenderTimer();
+      if (_displayedContent != _bufferedContent ||
+          _displayedStatus != newMsg.status) {
+        setState(() {
+          _displayedContent = _bufferedContent;
+          _displayedStatus = newMsg.status;
+        });
+      }
+      return;
+    } else if (!isStreaming) {
+      // Non-streaming, non-terminal status change (e.g. sending).
+      _stopRenderTimer();
+      if (_displayedStatus != newMsg.status ||
+          _displayedContent != newMsg.content) {
+        setState(() {
+          _displayedContent = newMsg.content;
+          _displayedStatus = newMsg.status;
+        });
+      }
+      return;
+    }
+
+    // Ongoing stream chunks (wasStreaming && isStreaming):
+    // Do not call setState here. The periodic _renderTimer will flush _bufferedContent
+    // at the throttled interval (_kRenderIntervalMs).
+  }
+
+  @override
+  void dispose() {
+    _stopRenderTimer();
+    super.dispose();
+  }
+
+  void _startRenderTimer() {
+    _renderTimer?.cancel();
+    _renderTimer = Timer.periodic(
+      const Duration(milliseconds: _kRenderIntervalMs),
+      (_) => _flushIfChanged(),
+    );
+  }
+
+  void _stopRenderTimer() {
+    _renderTimer?.cancel();
+    _renderTimer = null;
+  }
+
+  /// Called by the periodic timer. Commits buffered content to the tree only
+  /// when it differs from what is already displayed — skips no-op frames.
+  void _flushIfChanged() {
+    if (!mounted) return;
+    if (_displayedContent != _bufferedContent ||
+        _displayedStatus != widget.message.status) {
+      setState(() {
+        _displayedContent = _bufferedContent;
+        _displayedStatus = widget.message.status;
+      });
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final disableAnimations =
+        MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+    // Use buffered/displayed state, not widget.message directly, so that
+    // render cadence is controlled by the throttle.
+    final effectiveStatus = _displayedStatus;
+    final effectiveContent = _displayedContent;
+
+    Widget body = Padding(
+      padding: const EdgeInsets.only(bottom: 20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Sender label
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8, left: 2),
+            child: Row(
+              children: [
+                Container(
+                  width: 6,
+                  height: 6,
+                  decoration: BoxDecoration(
+                    color: context.colors.accent,
+                    shape: BoxShape.circle,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  'SciChat',
+                  style: context.typography.labelSmall?.copyWith(
+                    color: context.colors.accent,
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          // 1. Content section with smooth status transition
+          _buildContent(
+            context,
+            disableAnimations,
+            effectiveStatus,
+            effectiveContent,
+          ),
+
+          // 2. Attached papers / sources section
+          if (widget.message.papers.isNotEmpty)
+            _SourcesSection(
+              key: ValueKey('sources_${widget.message.id}'),
+              papers: widget.message.papers,
+              status: effectiveStatus,
+              isFavorite: widget.isFavorite,
+              onFavoriteToggle: widget.onFavoriteToggle,
+              onPaperTap: widget.onPaperTap,
+              onSummarize: widget.onSummarize,
+              onChatPdf: widget.onChatPdf,
+              validatedCitationPages: widget.message.validatedCitationPages,
+              onCitationTap: widget.onCitationTap,
+            ),
+
+          // 3. Toolbar aksi respons (salin, bagikan, regenerasi, cabangkan, bookmark)
+          if (effectiveStatus == MessageStatus.done ||
+              (effectiveStatus == MessageStatus.error &&
+                  effectiveContent.isNotEmpty &&
+                  !effectiveContent.startsWith('Error:')))
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: _MessageActionToolbar(
+                message: widget.message,
+                onRegenerate: widget.onRegenerate,
+                onBranch: widget.onBranch,
+              ),
+            ),
+
+          // 4. Contextual Follow-up Suggestions
+          if (effectiveStatus == MessageStatus.done &&
+              widget.message.followUpSuggestions.isNotEmpty)
+            _FollowUpSuggestionsSection(
+              key: ValueKey('followup_${widget.message.id}'),
+              suggestions: widget.message.followUpSuggestions,
+              onTap: widget.onFollowUpTap,
+            ),
+        ],
+      ),
+    );
+
+    if (disableAnimations) {
+      return body;
+    }
+
     return Animate(
       effects: [
         FadeEffect(duration: 200.ms, curve: Curves.easeOut),
@@ -381,141 +661,129 @@ class _AssistantBubble extends StatelessWidget {
           curve: Curves.easeOut,
         ),
       ],
-      child: Padding(
-        padding: const EdgeInsets.only(bottom: 20),
+      child: body,
+    );
+  }
+
+  Widget _buildContent(
+    BuildContext context,
+    bool disableAnimations,
+    MessageStatus effectiveStatus,
+    String effectiveContent,
+  ) {
+    final isStreaming = effectiveStatus == MessageStatus.streaming;
+    Widget child;
+
+    if (effectiveStatus == MessageStatus.sending) {
+      child = KeyedSubtree(
+        key: const ValueKey('assistant_thinking'),
+        child: _ThinkingIndicator(),
+      );
+    } else if (effectiveStatus == MessageStatus.error) {
+      child = KeyedSubtree(
+        key: ValueKey('assistant_error_${widget.message.id}'),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Sender label
-            Padding(
-              padding: const EdgeInsets.only(bottom: 8, left: 2),
-              child: Row(
-                children: [
-                  Container(
-                    width: 6,
-                    height: 6,
-                    decoration: BoxDecoration(
-                      color: context.colors.accent,
-                      shape: BoxShape.circle,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    'SciChat',
-                    style: context.typography.labelSmall?.copyWith(
-                      color: context.colors.accent,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-
-            // Content
-            if (message.status == MessageStatus.sending)
-              _ThinkingIndicator()
-            else if (message.status == MessageStatus.error) ...[
-              if (message.content.isNotEmpty &&
-                  !message.content.startsWith('Error:')) ...[
-                MessageContent(content: message.content),
-                const SizedBox(height: 6),
-                _MessageActionToolbar(
-                  message: message,
-                  onRegenerate: onRegenerate,
-                  onBranch: onBranch,
-                ),
-                const SizedBox(height: 8),
-              ],
-              _ErrorMessage(
-                errorType: message.errorType,
-                hasPartialResponse: message.content.isNotEmpty,
-                onRetry: message.content.isEmpty &&
-                        message.errorType != ChatErrorType.authentication
-                    ? onRetry
-                    : null,
-                onContinue: message.content.isNotEmpty &&
-                        message.errorType != ChatErrorType.authentication
-                    ? onContinue
-                    : null,
-                onDismiss: onDismissError,
-              ),
-            ] else ...[
-              MessageContent(content: message.content),
-              if (message.status == MessageStatus.streaming)
-                Padding(
-                  padding: const EdgeInsets.only(top: 8),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      SizedBox(
-                        width: 10,
-                        height: 10,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 1.5,
-                          color: context.colors.accent,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        'Menulis respons...',
-                        style: context.typography.labelSmall?.copyWith(
-                          color: context.colors.textMuted,
-                          fontStyle: FontStyle.italic,
-                          fontSize: 11,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              if (message.status == MessageStatus.done &&
-                  message.isTruncated &&
-                  message.finishReason != 'cancelled') ...[
-                const SizedBox(height: 10),
-                _TruncatedContinuationBanner(
-                  onContinue: onContinue,
-                ),
-              ] else if (message.status == MessageStatus.done &&
-                  message.finishReason == 'cancelled') ...[
-                const SizedBox(height: 10),
-                const _CancelledGenerationBanner(),
-              ],
-              if (message.status == MessageStatus.done)
-                Padding(
-                  padding: const EdgeInsets.only(top: 8),
-                  child: _MessageActionToolbar(
-                    message: message,
-                    onRegenerate: onRegenerate,
-                    onBranch: onBranch,
-                  ),
-                ),
+            if (effectiveContent.isNotEmpty &&
+                !effectiveContent.startsWith('Error:')) ...[
+              _getMessageContent(effectiveContent, false),
+              const SizedBox(height: 8),
             ],
-
-            // Attached papers / sources section
-            if (message.papers.isNotEmpty)
-              _SourcesSection(
-                papers: message.papers,
-                status: message.status,
-                isFavorite: isFavorite,
-                onFavoriteToggle: onFavoriteToggle,
-                onPaperTap: onPaperTap,
-                onSummarize: onSummarize,
-                onChatPdf: onChatPdf,
-              ),
-
-            // Contextual Follow-up Suggestions
-            if (message.status == MessageStatus.done &&
-                message.followUpSuggestions.isNotEmpty)
-              _FollowUpSuggestionsSection(
-                suggestions: message.followUpSuggestions,
-                onTap: onFollowUpTap,
-              ),
+            _ErrorMessage(
+              errorType: widget.message.errorType,
+              hasPartialResponse: effectiveContent.isNotEmpty,
+              onRetry: effectiveContent.isEmpty &&
+                      widget.message.errorType != ChatErrorType.authentication
+                  ? widget.onRetry
+                  : null,
+              onContinue: effectiveContent.isNotEmpty &&
+                      widget.message.errorType != ChatErrorType.authentication
+                  ? widget.onContinue
+                  : null,
+              onDismiss: widget.onDismissError,
+            ),
           ],
         ),
-      ),
+      );
+    } else {
+      child = KeyedSubtree(
+        key: ValueKey('assistant_body_${widget.message.id}'),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Pass isStreaming so MarkdownBody skips SelectionArea overhead
+            // while chunks are arriving at high frequency.
+            _getMessageContent(
+              effectiveContent,
+              isStreaming,
+            ),
+            if (isStreaming)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    SizedBox(
+                      width: 10,
+                      height: 10,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 1.5,
+                        color: context.colors.accent,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Menulis respons...',
+                      style: context.typography.labelSmall?.copyWith(
+                        color: context.colors.textMuted,
+                        fontStyle: FontStyle.italic,
+                        fontSize: 11,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            if (effectiveStatus == MessageStatus.done &&
+                widget.message.isTruncated &&
+                widget.message.finishReason != 'cancelled') ...[
+              const SizedBox(height: 10),
+              _TruncatedContinuationBanner(
+                onContinue: widget.onContinue,
+              ),
+            ] else if (effectiveStatus == MessageStatus.done &&
+                widget.message.finishReason == 'cancelled') ...[
+              const SizedBox(height: 10),
+              const _CancelledGenerationBanner(),
+            ],
+          ],
+        ),
+      );
+    }
+
+    if (disableAnimations) {
+      return child;
+    }
+
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 150),
+      switchInCurve: Curves.easeOut,
+      switchOutCurve: Curves.easeIn,
+      layoutBuilder: (currentChild, previousChildren) {
+        return Stack(
+          alignment: Alignment.topLeft,
+          children: <Widget>[
+            ...previousChildren,
+            if (currentChild != null) currentChild,
+          ],
+        );
+      },
+      child: child,
     );
   }
 }
 
-class _SourcesSection extends StatefulWidget {
+class _SourcesSection extends StatelessWidget {
   final List<ArxivPaper> papers;
   final MessageStatus status;
   final bool Function(String) isFavorite;
@@ -523,8 +791,11 @@ class _SourcesSection extends StatefulWidget {
   final Function(ArxivPaper) onPaperTap;
   final Function(ArxivPaper)? onSummarize;
   final Function(ArxivPaper)? onChatPdf;
+  final Map<String, List<int>>? validatedCitationPages;
+  final void Function(CitationReference citation)? onCitationTap;
 
   const _SourcesSection({
+    super.key,
     required this.papers,
     required this.status,
     required this.isFavorite,
@@ -532,22 +803,40 @@ class _SourcesSection extends StatefulWidget {
     required this.onPaperTap,
     this.onSummarize,
     this.onChatPdf,
+    this.validatedCitationPages,
+    this.onCitationTap,
   });
 
-  @override
-  State<_SourcesSection> createState() => _SourcesSectionState();
-}
+  void _openSourcesSheet(BuildContext context) {
+    FocusScope.of(context).unfocus();
 
-class _SourcesSectionState extends State<_SourcesSection> {
-  bool _isExpanded = false;
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      backgroundColor: context.colors.surface1,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (sheetContext) => _SourcesBottomSheet(
+        papers: papers,
+        isFavorite: isFavorite,
+        onFavoriteToggle: onFavoriteToggle,
+        onPaperTap: onPaperTap,
+        onSummarize: onSummarize,
+        onChatPdf: onChatPdf,
+        validatedCitationPages: validatedCitationPages,
+        onCitationTap: onCitationTap,
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
-    if (widget.papers.isEmpty) return const SizedBox.shrink();
+    if (papers.isEmpty) return const SizedBox.shrink();
 
     // Selama status sending atau streaming: tampilkan indikator ringkas agar teks AI menjadi fokus
-    if (widget.status == MessageStatus.sending ||
-        widget.status == MessageStatus.streaming) {
+    if (status == MessageStatus.sending || status == MessageStatus.streaming) {
       return Padding(
         padding: const EdgeInsets.only(top: 10, left: 2),
         child: Container(
@@ -564,7 +853,7 @@ class _SourcesSectionState extends State<_SourcesSection> {
                   size: 14, color: context.colors.accent),
               const SizedBox(width: 8),
               Text(
-                'Menyiapkan ${widget.papers.length} sumber makalah…',
+                'Menyiapkan ${papers.length} sumber makalah…',
                 style: context.typography.labelSmall?.copyWith(
                   color: context.colors.textMuted,
                   fontSize: 11,
@@ -576,99 +865,425 @@ class _SourcesSectionState extends State<_SourcesSection> {
       );
     }
 
-    // Setelah status done atau error: sediakan bagian sumber yang dapat dibuka dan ditutup (collapsible)
+    // Setelah status done atau error: sediakan tombol pemicu interaktif untuk membuka bottom sheet modal
     return Padding(
       padding: const EdgeInsets.only(top: 12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          PressFeedback(
-              scaleFactor: 0.985,
-              child: InkWell(
-                onTap: () {
-                  HapticFeedback.selectionClick();
-                  setState(() => _isExpanded = !_isExpanded);
-                },
+      child: PressFeedback(
+        scaleFactor: 0.985,
+        child: Semantics(
+          label: 'Sumber makalah (${papers.length})',
+          button: true,
+          hint: 'Buka daftar sumber makalah dalam bottom sheet',
+          child: InkWell(
+            key: const ValueKey('sources_sheet_trigger'),
+            onTap: () {
+              HapticFeedback.selectionClick();
+              _openSourcesSheet(context);
+            },
+            borderRadius: BorderRadius.circular(8),
+            child: Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: context.colors.surface1,
                 borderRadius: BorderRadius.circular(8),
-                child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: context.colors.surface1,
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: context.colors.borderSubtle),
+                border: Border.all(color: context.colors.borderSubtle),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.library_books_outlined,
+                      size: 16, color: context.colors.accent),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Sumber makalah (${papers.length})',
+                      style: context.typography.labelMedium?.copyWith(
+                        fontWeight: FontWeight.w600,
+                        color: context.colors.textPrimary,
+                      ),
+                    ),
                   ),
-                  child: Row(
-                    children: [
-                      Icon(Icons.library_books_outlined,
-                          size: 16, color: context.colors.accent),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          'Sumber makalah (${widget.papers.length})',
-                          style: context.typography.labelMedium?.copyWith(
-                            fontWeight: FontWeight.w600,
-                            color: context.colors.textPrimary,
+                  Text(
+                    'Lihat',
+                    style: context.typography.labelSmall?.copyWith(
+                      color: context.colors.accent,
+                      fontWeight: FontWeight.w500,
+                      fontSize: 11,
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  Icon(
+                    Icons.keyboard_arrow_up_rounded,
+                    size: 18,
+                    color: context.colors.textMuted,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Modal Bottom Sheet untuk daftar sumber makalah dengan scrolling mandiri,
+/// header sticky, dan preservasi seluruh aksi paper.
+class _SourcesBottomSheet extends StatefulWidget {
+  final List<ArxivPaper> papers;
+  final bool Function(String) isFavorite;
+  final Function(ArxivPaper) onFavoriteToggle;
+  final Function(ArxivPaper) onPaperTap;
+  final Function(ArxivPaper)? onSummarize;
+  final Function(ArxivPaper)? onChatPdf;
+  final Map<String, List<int>>? validatedCitationPages;
+  final void Function(CitationReference citation)? onCitationTap;
+
+  const _SourcesBottomSheet({
+    required this.papers,
+    required this.isFavorite,
+    required this.onFavoriteToggle,
+    required this.onPaperTap,
+    this.onSummarize,
+    this.onChatPdf,
+    this.validatedCitationPages,
+    this.onCitationTap,
+  });
+
+  @override
+  State<_SourcesBottomSheet> createState() => _SourcesBottomSheetState();
+}
+
+class _SourcesBottomSheetState extends State<_SourcesBottomSheet> {
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final count = widget.papers.length;
+
+    // Mendengarkan provider langsung jika tersedia agar sinkronisasi favorit reaktif
+    SciChatProvider? provider;
+    try {
+      provider = context.watch<SciChatProvider>();
+    } catch (_) {}
+
+    final bool Function(String) effectiveIsFavorite =
+        provider != null ? ((id) => provider!.isFavorite(id)) : widget.isFavorite;
+
+    return DraggableScrollableSheet(
+      initialChildSize: 0.70,
+      minChildSize: 0.40,
+      maxChildSize: 0.95,
+      expand: false,
+      builder: (sheetContext, scrollController) {
+        return Container(
+          decoration: BoxDecoration(
+            color: isDark ? c.surface1 : Colors.white,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // 1. Drag Handle
+              Center(
+                child: Container(
+                  margin: const EdgeInsets.only(top: 8, bottom: 4),
+                  width: 36,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: c.borderMedium,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+
+              // 2. Sticky Header: Ikon, Judul Sumber Makalah (N), dan Tombol Tutup
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 4, 8, 4),
+                child: Row(
+                  children: [
+                    Icon(Icons.library_books_outlined,
+                        size: 18, color: c.accent),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Sumber Makalah ($count)',
+                        style: GoogleFonts.sourceSerif4(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                          color: c.textPrimary,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    PressFeedback(
+                      scaleFactor: 0.9,
+                      child: Tooltip(
+                        message: 'Tutup',
+                        child: Semantics(
+                          label: 'Tutup',
+                          button: true,
+                          child: InkWell(
+                            key: const ValueKey('close_sources_sheet'),
+                            onTap: () => Navigator.of(sheetContext).pop(),
+                            borderRadius: BorderRadius.circular(8),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 10, vertical: 8),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text(
+                                    'Tutup',
+                                    style:
+                                        context.typography.labelSmall?.copyWith(
+                                      color: c.textMuted,
+                                      fontWeight: FontWeight.w500,
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 4),
+                                  Icon(Icons.close_rounded,
+                                      size: 18, color: c.textMuted),
+                                ],
+                              ),
+                            ),
                           ),
                         ),
                       ),
-                      Text(
-                        _isExpanded ? 'Tutup' : 'Lihat',
-                        style: context.typography.labelSmall?.copyWith(
-                          color: context.colors.accent,
-                          fontWeight: FontWeight.w500,
-                          fontSize: 11,
-                        ),
-                      ),
-                      const SizedBox(width: 4),
-                      Icon(
-                        _isExpanded ? Icons.expand_less : Icons.expand_more,
-                        size: 18,
-                        color: context.colors.textMuted,
-                      ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
-              )),
-          if (_isExpanded) ...[
-            const SizedBox(height: 12),
-            _TrendChart(papers: widget.papers),
-            const SizedBox(height: 12),
-            ...widget.papers.asMap().entries.map((e) => Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
-                  child: PaperCard(
-                    paper: e.value,
-                    isFavorite: widget.isFavorite(e.value.id),
-                    onFavoriteToggle: () => widget.onFavoriteToggle(e.value),
-                    onTap: () => widget.onPaperTap(e.value),
-                    onSummarize: widget.onSummarize != null
-                        ? () => widget.onSummarize!(e.value)
-                        : null,
-                    onChatPdf: widget.onChatPdf != null
-                        ? () => widget.onChatPdf!(e.value)
-                        : null,
-                    index: e.key,
-                  ),
-                )),
-          ],
-        ],
-      ),
+              ),
+              Divider(height: 1, thickness: 0.8, color: c.borderSubtle),
+
+              // 3. Scrollable List of Papers using scrollController
+              Expanded(
+                child: ListView.builder(
+                  controller: scrollController,
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+                  itemCount:
+                      (widget.papers.length >= 2 ? 1 : 0) + widget.papers.length,
+                  itemBuilder: (itemCtx, index) {
+                    // Item 0 (jika >= 2 paper): grafik tren publikasi
+                    if (widget.papers.length >= 2 && index == 0) {
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 14),
+                        child: _TrendChart(papers: widget.papers),
+                      );
+                    }
+
+                    final paperIndex =
+                        widget.papers.length >= 2 ? index - 1 : index;
+                    final paper = widget.papers[paperIndex];
+                    final citedPages = widget.validatedCitationPages?[paper.id];
+
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 12),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          PaperCard(
+                            paper: paper,
+                            isFavorite: effectiveIsFavorite(paper.id),
+                            onFavoriteToggle: () {
+                              widget.onFavoriteToggle(paper);
+                              setState(() {});
+                            },
+                            onTap: () => widget.onPaperTap(paper),
+                            onSummarize: widget.onSummarize != null
+                                ? () {
+                                    Navigator.of(sheetContext).pop();
+                                    widget.onSummarize!(paper);
+                                  }
+                                : null,
+                            onChatPdf: widget.onChatPdf != null
+                                ? () {
+                                    Navigator.of(sheetContext).pop();
+                                    widget.onChatPdf!(paper);
+                                  }
+                                : null,
+                            index: paperIndex,
+                          ),
+                          if (citedPages != null && citedPages.isNotEmpty) ...[
+                            const SizedBox(height: 6),
+                            Padding(
+                              padding: const EdgeInsets.only(left: 4),
+                              child: Wrap(
+                                spacing: 6,
+                                runSpacing: 4,
+                                crossAxisAlignment: WrapCrossAlignment.center,
+                                children: [
+                                  Text(
+                                    'Halaman rujukan:',
+                                    style:
+                                        context.typography.labelSmall?.copyWith(
+                                      color: c.textMuted,
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                  ...citedPages.map((pNum) {
+                                    return PressFeedback(
+                                      scaleFactor: 0.95,
+                                      child: InkWell(
+                                        onTap: () {
+                                          final citation = CitationReference(
+                                            documentId: paper.id,
+                                            documentTitle: paper.title,
+                                            pageNumber: pNum,
+                                            paper: paper,
+                                            rawText: '[Hal. $pNum]',
+                                          );
+                                          if (widget.onCitationTap != null) {
+                                            widget.onCitationTap!(citation);
+                                          } else {
+                                            MessageContent.handleLinkTap(
+                                              itemCtx,
+                                              citation.toUri().toString(),
+                                              availablePapers: widget.papers,
+                                              onCitationTap:
+                                                  widget.onCitationTap,
+                                            );
+                                          }
+                                        },
+                                        borderRadius: BorderRadius.circular(6),
+                                        child: Container(
+                                          padding: const EdgeInsets.symmetric(
+                                              horizontal: 8, vertical: 3),
+                                          decoration: BoxDecoration(
+                                            color: c.surface2,
+                                            borderRadius:
+                                                BorderRadius.circular(6),
+                                            border: Border.all(
+                                              color: c.accent
+                                                  .withValues(alpha: 0.3),
+                                            ),
+                                          ),
+                                          child: Row(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              Icon(
+                                                Icons.menu_book_outlined,
+                                                size: 11,
+                                                color: c.accent,
+                                              ),
+                                              const SizedBox(width: 4),
+                                              Text(
+                                                'Hal. $pNum',
+                                                style: context
+                                                    .typography.labelSmall
+                                                    ?.copyWith(
+                                                  color: c.accent,
+                                                  fontWeight: FontWeight.w600,
+                                                  fontSize: 11,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                    );
+                                  }),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 }
 
 class MessageContent extends StatelessWidget {
   final String content;
-  const MessageContent({super.key, required this.content});
 
-  static Future<void> handleLinkTap(BuildContext context, String? href) async {
+  /// When true the message is actively streaming. This disables [SelectionArea]
+  /// (selectable:false on MarkdownBody) to avoid the overhead of updating the
+  /// entire selection layer on every throttled render frame. Selectable is
+  /// restored to true once the message reaches a terminal status.
+  final bool isStreaming;
+
+  /// Makalah-makalah sumber yang terkait dengan pesan ini (Phase 5C).
+  final List<ArxivPaper> papers;
+
+  /// Peta nomor halaman sitasi tervalidasi per documentId (Phase 5C).
+  final Map<String, List<int>>? validatedCitationPages;
+
+  /// Peta seksi ke nomor halaman tervalidasi per documentId (Phase 5C).
+  final Map<String, Map<String, int>>? validatedSectionPages;
+
+  /// Callback opsional ketika sitasi diklik. Jika null, membuka [PdfViewerScreen] secara default.
+  final void Function(CitationReference citation)? onCitationTap;
+
+  const MessageContent({
+    super.key,
+    required this.content,
+    this.isStreaming = false,
+    this.papers = const [],
+    this.validatedCitationPages,
+    this.validatedSectionPages,
+    this.onCitationTap,
+  });
+
+  static Future<void> handleLinkTap(
+    BuildContext context,
+    String? href, {
+    List<ArxivPaper> availablePapers = const [],
+    void Function(CitationReference citation)? onCitationTap,
+  }) async {
     if (href == null || href.trim().isEmpty) return;
 
     final trimmed = href.trim();
     final uri = Uri.tryParse(trimmed);
-    if (uri == null ||
-        !uri.hasScheme ||
-        (uri.scheme != 'https' && uri.scheme != 'http')) {
+    if (uri == null || !uri.hasScheme) return;
+
+    // ── Dukungan Tautan Sitasi PDF SCIChat (Phase 5C) ─────────────────────
+    if (uri.scheme == 'scichat-cite') {
+      List<ArxivPaper> candidatePapers = List.from(availablePapers);
+      if (candidatePapers.isEmpty) {
+        try {
+          final provider = Provider.of<SciChatProvider>(context, listen: false);
+          candidatePapers = List.from(provider.activeContexts);
+          if (candidatePapers.isEmpty) {
+            candidatePapers = List.from(provider.favorites);
+          }
+        } catch (_) {}
+      }
+
+      final citation = CitationReference.fromUri(uri, candidatePapers);
+      if (citation == null) {
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Sitasi tidak valid atau dokumen tidak ditemukan.'),
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
+        return;
+      }
+
+      if (onCitationTap != null) {
+        onCitationTap(citation);
+        return;
+      }
+
+      // Navigasi default ke PdfViewerScreen
+      _navigateToPdfViewer(context, citation);
+      return;
+    }
+
+    if (uri.scheme != 'https' && uri.scheme != 'http') {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -704,8 +1319,134 @@ class MessageContent extends StatelessWidget {
     }
   }
 
+  static void _navigateToPdfViewer(
+    BuildContext context,
+    CitationReference citation,
+  ) {
+    final paper = citation.paper;
+    final page = citation.pageNumber;
+
+    if (paper.isLocal || paper.pdfUrl.startsWith('file://')) {
+      final path = PdfDocumentContext.normalizeFilePath(paper.pdfUrl);
+      if (!kIsWeb && path.isNotEmpty) {
+        final file = io.File(path);
+        if (!file.existsSync()) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                'Berkas PDF lokal tidak ditemukan pada penyimpanan perangkat:\n$path',
+              ),
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+          return;
+        }
+      }
+    } else if (paper.pdfUrl.trim().isEmpty) {
+      // Jika sitasi ordinal tanpa URL PDF, buka PaperDetailScreen sebagai fallback
+      if (citation.ordinal != null && citation.pageNumber == null) {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => PaperDetailScreen(paper: paper),
+          ),
+        );
+        return;
+      }
+      // Sitasi halaman pada dokumen tanpa URL PDF yang valid (perilaku Tahap 5C)
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Dokumen tidak memiliki URL PDF yang valid.'),
+        ),
+      );
+      return;
+    }
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => PdfViewerScreen.fromPaper(
+          paper: paper,
+          initialPage: page ?? 1,
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    List<ArxivPaper> effectivePapers = papers;
+    if (effectivePapers.isEmpty) {
+      try {
+        final provider = Provider.of<SciChatProvider>(context, listen: false);
+        effectivePapers = provider.activeContexts;
+      } catch (_) {}
+    }
+
+    Map<String, Set<int>>? validatedPagesMap;
+    Map<String, Map<String, int>>? validatedSectionPagesMap;
+
+    if (validatedCitationPages != null && validatedCitationPages!.isNotEmpty) {
+      validatedPagesMap = validatedCitationPages!.map(
+        (k, v) => MapEntry(k, v.toSet()),
+      );
+    }
+    if (validatedSectionPages != null && validatedSectionPages!.isNotEmpty) {
+      validatedSectionPagesMap = validatedSectionPages;
+    }
+
+    if (validatedPagesMap == null || validatedSectionPagesMap == null) {
+      try {
+        final provider = Provider.of<SciChatProvider>(context, listen: false);
+        final map = <String, Set<int>>{};
+        final secMap = <String, Map<String, int>>{};
+
+        for (final p in effectivePapers) {
+          final ev = provider.getEvidence(p.id);
+          if (ev != null && ev.chunks.isNotEmpty) {
+            final validPages = ev.chunks
+                .map((c) => c.pageNumber)
+                .where((page) => page != PdfChunk.kUnknownPage && page > 0)
+                .toSet();
+            if (validPages.isNotEmpty) {
+              map[p.id] = validPages;
+            }
+            final chunkSecMap = <String, int>{};
+            for (final c in ev.chunks) {
+              if (c.pageNumber > 0 && c.pageNumber != PdfChunk.kUnknownPage) {
+                final t = c.sectionTitle.trim().toLowerCase();
+                if (t.isNotEmpty) {
+                  chunkSecMap[t] = c.pageNumber;
+                  final numMatch = RegExp(
+                    r'(?:seksi|section|bagian)?\s*(\d+(?:\.\d+)*)',
+                    caseSensitive: false,
+                  ).firstMatch(t);
+                  if (numMatch != null) {
+                    final n = numMatch.group(1);
+                    if (n != null && n.isNotEmpty) {
+                      chunkSecMap[n] = c.pageNumber;
+                      chunkSecMap['seksi $n'] = c.pageNumber;
+                      chunkSecMap['section $n'] = c.pageNumber;
+                      chunkSecMap['bagian $n'] = c.pageNumber;
+                    }
+                  }
+                }
+              }
+            }
+            if (chunkSecMap.isNotEmpty) {
+              secMap[p.id] = chunkSecMap;
+            }
+          }
+        }
+        if (validatedPagesMap == null && map.isNotEmpty) {
+          validatedPagesMap = map;
+        }
+        if (validatedSectionPagesMap == null && secMap.isNotEmpty) {
+          validatedSectionPagesMap = secMap;
+        }
+      } catch (_) {}
+    }
+
     return LayoutBuilder(
       builder: (context, constraints) {
         final availableWidth = constraints.maxWidth.isFinite
@@ -730,8 +1471,16 @@ class MessageContent extends StatelessWidget {
 
         return MarkdownBody(
           data: content,
-          selectable: true,
-          onTapLink: (text, href, title) => handleLinkTap(context, href),
+          // Disable selectable during streaming to avoid SelectionArea
+          // re-layout overhead on every throttled render frame (~12 fps).
+          // Selectable is re-enabled once isStreaming becomes false.
+          selectable: !isStreaming,
+          onTapLink: (text, href, title) => handleLinkTap(
+            context,
+            href,
+            availablePapers: effectivePapers,
+            onCitationTap: onCitationTap,
+          ),
           builders: {
             'latex': CustomLatexElementBuilder(context),
             'code': _CodeElementBuilder(context),
@@ -744,6 +1493,11 @@ class MessageContent extends StatelessWidget {
             [
               HtmlBreakSyntax(),
               MathInlineSyntax(),
+              CitationInlineSyntax(
+                availablePapers: effectivePapers,
+                validatedPagesMap: validatedPagesMap,
+                validatedSectionPagesMap: validatedSectionPagesMap,
+              ),
               ...md.ExtensionSet.gitHubFlavored.inlineSyntaxes
             ],
           ),
@@ -960,24 +1714,33 @@ class _ThinkingIndicator extends StatelessWidget {
   Widget build(BuildContext context) {
     final text =
         context.watch<SciChatProvider>().statusText ?? 'Memahami pertanyaan...';
+    final disableAnimations =
+        MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+
+    final textWidget = Text(
+      text,
+      style: context.typography.bodySmall?.copyWith(
+        fontStyle: FontStyle.italic,
+        color: context.colors.textSecondary,
+      ),
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+    );
 
     return Row(
       children: [
         const GhostLoader(size: 28.0),
         const SizedBox(width: 12),
         Expanded(
-          child: Text(
-            text,
-            style: context.typography.bodySmall?.copyWith(
-              fontStyle: FontStyle.italic,
-              color: context.colors.textSecondary,
-            ),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-          ).animate(key: ValueKey(text)).fadeIn(duration: 300.ms).shimmer(
-                duration: 1200.ms,
-                color: context.colors.textPrimary.withValues(alpha: 0.5),
-              ),
+          child: disableAnimations
+              ? textWidget
+              : textWidget
+                  .animate(key: ValueKey(text))
+                  .fadeIn(duration: 300.ms)
+                  .shimmer(
+                    duration: 1200.ms,
+                    color: context.colors.textPrimary.withValues(alpha: 0.5),
+                  ),
         ),
       ],
     );
@@ -1890,6 +2653,7 @@ class _FollowUpSuggestionsSection extends StatelessWidget {
   final Function(String)? onTap;
 
   const _FollowUpSuggestionsSection({
+    super.key,
     required this.suggestions,
     this.onTap,
   });
@@ -1918,18 +2682,18 @@ class _FollowUpSuggestionsSection extends StatelessWidget {
               ),
             ],
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 10),
           ...suggestions.asMap().entries.map((entry) {
             final index = entry.key;
             final text = entry.value;
             final cleanText = cleanSuggestionText(text);
             return Padding(
-              padding: const EdgeInsets.only(bottom: 4),
+              padding: const EdgeInsets.only(bottom: 8),
               child: _FollowUpChip(
                 text: text,
                 cleanText: cleanText,
                 onTap: () => onTap?.call(cleanText),
-                delay: Duration(milliseconds: 50 * index),
+                delay: Duration(milliseconds: 40 * index),
               ),
             );
           }),
@@ -2019,76 +2783,80 @@ class _FollowUpChipState extends State<_FollowUpChip> {
   Widget _buildContent(BuildContext context) {
     final colors = context.colors;
     final spans = _parseSpans(widget.text, colors);
+    final textStyle = GoogleFonts.sourceSerif4(
+      fontSize: 13,
+      color: colors.textPrimary,
+      height: 1.4,
+      fontWeight: FontWeight.w500,
+    );
+
     if (spans.length == 1 &&
         spans.first is TextSpan &&
         (spans.first as TextSpan).style == null) {
       return Text(
         widget.cleanText ?? widget.text,
-        style: GoogleFonts.sourceSerif4(
-          fontSize: 13,
-          color: colors.textPrimary,
-          height: 1.35,
-          fontWeight: FontWeight.w500,
-        ),
+        style: textStyle,
       );
     }
     return Text.rich(
       TextSpan(children: spans),
-      style: GoogleFonts.sourceSerif4(
-        fontSize: 13,
-        color: colors.textPrimary,
-        height: 1.35,
-        fontWeight: FontWeight.w500,
-      ),
+      style: textStyle,
     );
   }
 
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
-    return PressFeedback(
-      scaleFactor: 0.98,
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTapDown: (_) => setState(() => _pressed = true),
-        onTapCancel: () => setState(() => _pressed = false),
-        onTap: () {
-          setState(() => _pressed = false);
-          HapticFeedback.lightImpact();
-          widget.onTap();
-        },
-        child: AnimatedContainer(
-          duration: 100.ms,
-          width: double.infinity,
-          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 7),
-          decoration: BoxDecoration(
-            color: _pressed
-                ? colors.surface1.withValues(alpha: 0.5)
-                : Colors.transparent,
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Padding(
-                padding: const EdgeInsets.only(top: 1.5),
-                child: Icon(
-                  Icons.subdirectory_arrow_right_rounded,
-                  size: 16,
-                  color: colors.accent,
+    return Semantics(
+      button: true,
+      label: widget.cleanText ?? widget.text,
+      child: PressFeedback(
+        scaleFactor: 0.985,
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTapDown: (_) => setState(() => _pressed = true),
+          onTapCancel: () => setState(() => _pressed = false),
+          onTap: () {
+            setState(() => _pressed = false);
+            HapticFeedback.lightImpact();
+            widget.onTap();
+          },
+          child: AnimatedContainer(
+            duration: 100.ms,
+            width: double.infinity,
+            constraints: const BoxConstraints(minHeight: 44),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              color: _pressed ? colors.surface2 : colors.surface1,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                color: _pressed ? colors.borderMedium : colors.borderSubtle,
+                width: 1.0,
+              ),
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.only(top: 2),
+                  child: Icon(
+                    Icons.subdirectory_arrow_right_rounded,
+                    size: 16,
+                    color: colors.accent,
+                  ),
                 ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: _buildContent(context),
-              ),
-            ],
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _buildContent(context),
+                ),
+              ],
+            ),
           ),
         ),
       ),
     )
         .animate(delay: widget.delay)
-        .fadeIn(duration: 240.ms)
-        .slideY(begin: 0.04, end: 0, duration: 240.ms);
+        .fadeIn(duration: 200.ms)
+        .slideY(begin: 0.04, end: 0, duration: 200.ms);
   }
 }

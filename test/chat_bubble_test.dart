@@ -874,7 +874,7 @@ Pertanyaan riset utama:
     });
 
     testWidgets(
-        '2. Kotak rounded rectangle pembungkus individual sudah dihilangkan (tidak ada background kartu dan border)',
+        '2. Saran lanjutan memiliki tampilan interaktif (background lembut, border tipis, dan rounded corner)',
         (tester) async {
       final msg = createAssistantMsgWithSuggestions();
       await tester.pumpWidget(buildUserBubbleApp(messages: [msg]));
@@ -894,10 +894,22 @@ Pertanyaan riset utama:
       final decoration = animatedContainer.decoration as BoxDecoration?;
 
       expect(decoration, isNotNull);
-      // Tidak ada border individual di sekeliling item
-      expect(decoration!.border, isNull);
-      // Background idle transparan (bukan surface1 atau surface2)
-      expect(decoration.color, equals(Colors.transparent));
+      // Memiliki border tipis (borderSubtle)
+      expect(decoration!.border, isNotNull);
+      expect(decoration.border!.top.color,
+          equals(SciChatTheme.darkColors.borderSubtle));
+      // Background idle lembut mengikuti tema aktif (surface1)
+      expect(decoration.color, equals(SciChatTheme.darkColors.surface1));
+      // Radius sudut konsisten (10 dp)
+      expect(decoration.borderRadius, equals(BorderRadius.circular(10)));
+      // Touch target minimal 44 dp
+      expect(animatedContainer.constraints?.minHeight, equals(44.0));
+      // Semantics button tersedia
+      final semanticsFinder = find.ancestor(
+        of: containerFinder.first,
+        matching: find.byType(Semantics),
+      );
+      expect(semanticsFinder, findsWidgets);
       expect(tester.takeException(), isNull);
     });
 
@@ -1325,6 +1337,297 @@ Pertanyaan riset utama:
           expect(tester.takeException(), isNull);
         }
       }
+    });
+  });
+
+  group('Phase 2 — AI Response Reordering & Follow-Up Enhancement Tests', () {
+    const samplePaper = ArxivPaper(
+      id: '2401.00001',
+      title: 'Attention Is All You Need in Marine Science',
+      authors: ['Alice Walker', 'Bob Chen'],
+      summary:
+          'Studi komprehensif implementasi model transformer untuk observasi oseanografi.',
+      pdfUrl: 'https://arxiv.org/pdf/2401.00001',
+      absUrl: 'https://arxiv.org/abs/2401.00001',
+      published: '2024-01-01',
+      updated: '2024-01-01',
+      categories: ['cs.AI'],
+    );
+
+    ChatMessage createFullAssistantMsg({
+      MessageStatus status = MessageStatus.done,
+      String content =
+          'Berikut adalah analisis mendalam mengenai transformer maritim.',
+      List<ArxivPaper> papers = const [],
+      List<String> suggestions = const [],
+      bool isTruncated = false,
+      String? finishReason,
+    }) {
+      return ChatMessage(
+        id: 'asst-phase2-order-1',
+        role: MessageRole.assistant,
+        content: content,
+        status: status,
+        timestamp: DateTime.now(),
+        papers: papers,
+        followUpSuggestions: suggestions,
+        isTruncated: isTruncated,
+        finishReason: finishReason,
+      );
+    }
+
+    testWidgets(
+        '1. Urutan vertikal komponen respons: Isi AI -> Sumber Makalah -> Toolbar Aksi -> Saran Lanjutan',
+        (tester) async {
+      final msg = createFullAssistantMsg(
+        papers: [samplePaper],
+        suggestions: [
+          'Bagaimana perbandingan akurasi dengan LSTM?',
+          'Apa dampak variasi temporal pada model?',
+        ],
+      );
+
+      await tester.pumpWidget(buildUserBubbleApp(messages: [msg]));
+      await tester.pumpAndSettle();
+
+      // 1. Konten jawaban AI
+      final contentFinder =
+          find.textContaining('Berikut adalah analisis mendalam');
+      expect(contentFinder, findsOneWidget);
+
+      // 2. Sumber makalah
+      final sourcesFinder = find.textContaining('Sumber makalah');
+      expect(sourcesFinder, findsOneWidget);
+
+      // 3. Toolbar aksi
+      final toolbarFinder = find.byTooltip('Salin jawaban');
+      expect(toolbarFinder, findsOneWidget);
+
+      // 4. Saran lanjutan
+      final followUpFinder =
+          find.text('Bagaimana perbandingan akurasi dengan LSTM?');
+      expect(followUpFinder, findsOneWidget);
+
+      final contentDy = tester.getTopLeft(contentFinder).dy;
+      final sourcesDy = tester.getTopLeft(sourcesFinder).dy;
+      final toolbarDy = tester.getTopLeft(toolbarFinder).dy;
+      final followUpDy = tester.getTopLeft(followUpFinder).dy;
+
+      // Verifikasi hierarki vertikal ketat:
+      // content < sources < toolbar < followUp
+      expect(contentDy, lessThan(sourcesDy),
+          reason: 'Isi jawaban harus berada di atas sumber makalah');
+      expect(sourcesDy, lessThan(toolbarDy),
+          reason: 'Sumber makalah harus berada di atas toolbar aksi');
+      expect(toolbarDy, lessThan(followUpDy),
+          reason: 'Toolbar aksi harus berada di atas saran lanjutan');
+    });
+
+    testWidgets(
+        '2. Toolbar mengikuti aturan status respons (sembunyi saat sending & streaming, tampil saat done & error parsial)',
+        (tester) async {
+      // Status sending -> toolbar sembunyi
+      final sendingMsg = createFullAssistantMsg(
+        status: MessageStatus.sending,
+        content: '',
+      );
+      await tester.pumpWidget(buildUserBubbleApp(messages: [sendingMsg]));
+      await tester.pump();
+      expect(find.byTooltip('Salin jawaban'), findsNothing);
+
+      // Status streaming -> toolbar sembunyi
+      final streamingMsg = createFullAssistantMsg(
+        status: MessageStatus.streaming,
+        content: 'Model sedang berpikir...',
+      );
+      await tester.pumpWidget(buildUserBubbleApp(messages: [streamingMsg]));
+      await tester.pump();
+      expect(find.byTooltip('Salin jawaban'), findsNothing);
+
+      // Status error dengan konten parsial -> toolbar salin/bagikan tampil
+      final partialErrorMsg = createFullAssistantMsg(
+        status: MessageStatus.error,
+        content: 'Teks parsial sebelum terputus',
+      );
+      await tester.pumpWidget(buildUserBubbleApp(messages: [partialErrorMsg]));
+      await tester.pumpAndSettle();
+      expect(find.byTooltip('Salin jawaban'), findsOneWidget);
+      expect(find.byTooltip('Bagikan jawaban'), findsOneWidget);
+      expect(find.byTooltip('Simpan insight ke Catatan'), findsNothing);
+
+      // Status error total tanpa konten -> toolbar sembunyi
+      final emptyErrorMsg = createFullAssistantMsg(
+        status: MessageStatus.error,
+        content: '',
+      );
+      await tester.pumpWidget(buildUserBubbleApp(messages: [emptyErrorMsg]));
+      await tester.pumpAndSettle();
+      expect(find.byTooltip('Salin jawaban'), findsNothing);
+
+      // Status done -> toolbar penuh tampil
+      final doneMsg = createFullAssistantMsg(
+        status: MessageStatus.done,
+        content: 'Selesai sepenuhnya.',
+      );
+      await tester.pumpWidget(buildUserBubbleApp(messages: [doneMsg]));
+      await tester.pumpAndSettle();
+      expect(find.byTooltip('Salin jawaban'), findsOneWidget);
+      expect(find.byTooltip('Simpan insight ke Catatan'), findsOneWidget);
+    });
+
+    testWidgets(
+        '3. Jawaban tanpa sumber tidak menampilkan bagian sumber kosong dan langsung ke toolbar',
+        (tester) async {
+      final msg = createFullAssistantMsg(
+        papers: const [], // Tidak ada paper sumber
+        suggestions: ['Saran pertanyaan 1'],
+      );
+
+      await tester.pumpWidget(buildUserBubbleApp(messages: [msg]));
+      await tester.pumpAndSettle();
+
+      // Sumber makalah tidak ada
+      expect(find.textContaining('Sumber makalah'), findsNothing);
+      expect(find.textContaining('Menyiapkan'), findsNothing);
+
+      // Toolbar dan saran lanjutan tetap ada dan urut
+      final contentFinder =
+          find.textContaining('Berikut adalah analisis mendalam');
+      final toolbarFinder = find.byTooltip('Salin jawaban');
+      final followUpFinder = find.text('Saran pertanyaan 1');
+
+      expect(contentFinder, findsOneWidget);
+      expect(toolbarFinder, findsOneWidget);
+      expect(followUpFinder, findsOneWidget);
+
+      final contentDy = tester.getTopLeft(contentFinder).dy;
+      final toolbarDy = tester.getTopLeft(toolbarFinder).dy;
+      final followUpDy = tester.getTopLeft(followUpFinder).dy;
+
+      expect(contentDy, lessThan(toolbarDy));
+      expect(toolbarDy, lessThan(followUpDy));
+    });
+
+    testWidgets(
+        '4. Saran lanjutan memiliki tampilan interaktif dan callback yang benar',
+        (tester) async {
+      String? tappedText;
+      final msg = createFullAssistantMsg(
+        suggestions: ['**Evaluasi akurasi** pada data sensor laut'],
+      );
+
+      await tester.pumpWidget(buildUserBubbleApp(
+        messages: [msg],
+        onFollowUpTap: (text) => tappedText = text,
+      ));
+      await tester.pumpAndSettle();
+
+      final textFinder = find.text('Evaluasi akurasi pada data sensor laut');
+      expect(textFinder, findsOneWidget);
+
+      final containerFinder = find.ancestor(
+        of: textFinder,
+        matching: find.byType(AnimatedContainer),
+      );
+      expect(containerFinder, findsWidgets);
+
+      final container = tester.widget<AnimatedContainer>(containerFinder.first);
+      final decoration = container.decoration as BoxDecoration?;
+
+      // Background lembut dan border
+      expect(decoration?.color, equals(SciChatTheme.darkColors.surface1));
+      expect(decoration?.border, isNotNull);
+      expect(decoration?.borderRadius, equals(BorderRadius.circular(10)));
+      expect(container.constraints?.minHeight, equals(44.0));
+
+      // Tap saran
+      await tester.tap(textFinder);
+      await tester.pumpAndSettle();
+
+      expect(tappedText, equals('Evaluasi akurasi pada data sensor laut'));
+    });
+
+    testWidgets(
+        '5. Pertanyaan akademik panjang tidak menyebabkan overflow pada lebar layar 320 dp',
+        (tester) async {
+      final msg = createFullAssistantMsg(
+        papers: [samplePaper],
+        suggestions: [
+          'Bagaimana integrasi multi-modal convolutional vision transformer dengan spatial-temporal attention pada observasi oseanografi ekstrem?',
+        ],
+      );
+
+      tester.view.physicalSize = const Size(320, 800);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(() {
+        tester.view.resetPhysicalSize();
+        tester.view.resetDevicePixelRatio();
+      });
+
+      await tester.pumpWidget(buildUserBubbleApp(
+        messages: [msg],
+        width: 320.0,
+      ));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.textContaining('Bagaimana integrasi multi-modal'),
+        findsOneWidget,
+      );
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets(
+        '6. Tema terang dan gelap tetap terbaca dengan kontras harmonis',
+        (tester) async {
+      final msg = createFullAssistantMsg(
+        papers: [samplePaper],
+        suggestions: ['Saran pertanyaan 1'],
+      );
+
+      for (final isDark in [true, false]) {
+        await tester.pumpWidget(buildUserBubbleApp(
+          messages: [msg],
+          isDark: isDark,
+        ));
+        await tester.pumpAndSettle();
+
+        expect(find.text('SciChat'), findsOneWidget);
+        expect(find.textContaining('Sumber makalah'), findsOneWidget);
+        expect(find.byTooltip('Salin jawaban'), findsOneWidget);
+        expect(find.text('Saran pertanyaan 1'), findsOneWidget);
+        expect(tester.takeException(), isNull);
+      }
+    });
+
+    testWidgets(
+        '7. Markdown, LaTeX, dan struktur jawaban AI tetap ter-render secara utuh tanpa regresi',
+        (tester) async {
+      const complexContent = '''
+### Teorema Konvergensi
+Formula energi: \$E = mc^2\$ dan fungsi display:
+\$\$
+\\mathcal{L}_{\\theta} = \\mathbb{E}_{x}[ \\log p(x) ]
+\$\$
+
+* Poin 1: Validasi empiris
+* Poin 2: Eksperimen terukur
+''';
+      final msg = createFullAssistantMsg(
+        content: complexContent,
+        papers: [samplePaper],
+        suggestions: ['Lanjutkan ke analisis batch'],
+      );
+
+      await tester.pumpWidget(buildUserBubbleApp(messages: [msg]));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(Math), findsWidgets);
+      expect(find.textContaining('Poin 1: Validasi empiris'), findsOneWidget);
+      expect(find.textContaining('Sumber makalah'), findsOneWidget);
+      expect(find.byTooltip('Salin jawaban'), findsOneWidget);
+      expect(find.text('Lanjutkan ke analisis batch'), findsOneWidget);
+      expect(tester.takeException(), isNull);
     });
   });
 }
