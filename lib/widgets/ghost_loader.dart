@@ -75,7 +75,7 @@ class _GhostPainter extends CustomPainter {
     
     // Draw shadow
     final shadowPaint = Paint()
-      ..color = Colors.black.withOpacity(isStateA ? 0.3 : 0.1)
+      ..color = Colors.black.withValues(alpha: isStateA ? 0.3 : 0.1)
       ..maskFilter = MaskFilter.blur(BlurStyle.normal, pixelSize * 1.5);
     
     // The shadow is at the bottom, an ellipse rotated in 3D (flat)

@@ -179,7 +179,7 @@ class FavoritesScreen extends StatelessWidget {
                       border: Border(top: BorderSide(color: context.colors.borderSubtle)),
                       boxShadow: [
                         BoxShadow(
-                          color: Colors.black.withOpacity(0.05),
+                          color: Colors.black.withValues(alpha: 0.05),
                           offset: const Offset(0, -4),
                           blurRadius: 8,
                         ),
@@ -677,7 +677,7 @@ class _NoteDetailSheet extends StatelessWidget {
                     border: Border(top: BorderSide(color: context.colors.borderSubtle)),
                     boxShadow: [
                       BoxShadow(
-                        color: Colors.black.withOpacity(0.05),
+                        color: Colors.black.withValues(alpha: 0.05),
                         offset: const Offset(0, -4),
                         blurRadius: 8,
                       ),

@@ -169,7 +169,7 @@ class _PromptSnippet extends StatelessWidget {
           ),
           Container(
             padding: const EdgeInsets.all(12),
-            color: context.colors.surface2.withOpacity(0.5),
+            color: context.colors.surface2.withValues(alpha: 0.5),
             child: Text(
               prompt,
               style: GoogleFonts.jetBrainsMono(
