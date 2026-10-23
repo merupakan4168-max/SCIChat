@@ -3,7 +3,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_animate/flutter_animate.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../models/models.dart';
+import '../screens/pdf_viewer_screen.dart';
 import '../theme/scichat_theme.dart';
 import 'dynamic_source_button.dart';
 import 'press_feedback.dart';
@@ -248,15 +250,19 @@ class PaperCard extends StatelessWidget {
                   ),
 
                   // ── Abstract excerpt ───────────────────────────────────────
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
-                    child: Text(
-                      paper.truncatedSummary,
-                      style: context.typography.bodyMedium,
-                      maxLines: 4,
-                      overflow: TextOverflow.ellipsis,
+                  if (paper.summary.trim().isNotEmpty) ...[
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
+                      child: Text(
+                        paper.truncatedSummary,
+                        style: context.typography.bodyMedium,
+                        maxLines: 4,
+                        overflow: TextOverflow.ellipsis,
+                      ),
                     ),
-                  ),
+                  ] else ...[
+                    const SizedBox(height: 10),
+                  ],
 
                   // ── Footer: actions ─────────────────────────────
                   Container(
@@ -265,178 +271,181 @@ class PaperCard extends StatelessWidget {
                           top: BorderSide(color: context.colors.borderSubtle)),
                     ),
                     padding: const EdgeInsets.symmetric(
-                        horizontal: 16, vertical: 10),
-                    child: Column(
-                      children: [
-                        if ((onChatPdf != null && hasDirectPdf) ||
-                            onSummarize != null) ...[
-                          if (onChatPdf != null &&
-                              hasDirectPdf &&
-                              onSummarize != null)
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: Material(
-                                    color: context.colors.textPrimary,
-                                    shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(6)),
-                                    clipBehavior: Clip.antiAlias,
-                                    child: InkWell(
-                                      onTap: () {
-                                        HapticFeedback.lightImpact();
-                                        onChatPdf!();
-                                      },
-                                      child: SizedBox(
-                                        height: 36,
-                                        child: Row(
-                                          mainAxisAlignment:
-                                              MainAxisAlignment.center,
-                                          children: [
-                                            Icon(Icons.chat_bubble_outline,
-                                                size: 14,
-                                                color: context.colors.surface0),
-                                            const SizedBox(width: 6),
-                                            Flexible(
-                                              child: Text(
-                                                'Tanya Paper',
-                                                maxLines: 1,
-                                                overflow: TextOverflow.ellipsis,
-                                                style: context
-                                                    .typography.labelMedium
-                                                    ?.copyWith(
-                                                  color:
-                                                      context.colors.surface0,
-                                                  fontWeight: FontWeight.w600,
-                                                ),
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                      ),
-                                    ),
+                        horizontal: 14, vertical: 8),
+                    child: LayoutBuilder(
+                      builder: (context, constraints) {
+                        final bool hasTanyaPaper =
+                            onChatPdf != null && hasDirectPdf;
+                        final bool hasRangkum = onSummarize != null;
+                        final bool hasBothPrimary =
+                            hasTanyaPaper && hasRangkum;
+                        final bool hasUrl = paper.absUrl.isNotEmpty ||
+                            paper.pdfUrl.isNotEmpty;
+
+                        final textScale =
+                            MediaQuery.maybeTextScalerOf(context)?.scale(1.0) ??
+                                1.0;
+                        // Fallback 2-baris responsif jika kedua tombol teks aktif pada layar sangat sempit / teks besar
+                        final bool useTwoRows = hasBothPrimary &&
+                            constraints.maxWidth < (265 * textScale);
+
+                        if (useTwoRows) {
+                          return Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: _buildTanyaPaperButton(context),
                                   ),
-                                ),
-                                const SizedBox(width: 8),
-                                Expanded(
-                                  child: _ActionButton(
-                                    label: 'Rangkum',
-                                    icon: Icons.auto_stories_outlined,
-                                    onTap: onSummarize!,
-                                    isFullWidth: true,
-                                  ),
-                                ),
-                              ],
-                            )
-                          else if (onChatPdf != null && hasDirectPdf)
-                            SizedBox(
-                              width: double.infinity,
-                              child: _PrimaryActionButton(onTap: onChatPdf!),
-                            )
-                          else
-                            SizedBox(
-                              width: double.infinity,
-                              child: _ActionButton(
-                                label: 'Rangkum',
-                                icon: Icons.auto_stories_outlined,
-                                onTap: onSummarize!,
-                                isFullWidth: true,
-                              ),
-                            ),
-                          const SizedBox(height: 8),
-                        ],
-                        Row(
-                          children: [
-                            Expanded(
-                              child: PopupMenuButton<String>(
-                                tooltip: 'Kutip Makalah',
-                                onSelected: (format) {
-                                  if (format == 'bibtex') {
-                                    Clipboard.setData(
-                                        ClipboardData(text: paper.bibtex));
-                                  } else if (format == 'apa') {
-                                    Clipboard.setData(
-                                        ClipboardData(text: paper.apa));
-                                  }
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(
-                                      content: Text('Sitasi $format disalin',
-                                          style: context.typography.bodyMedium),
-                                      backgroundColor: context.colors.surface2,
-                                      duration: const Duration(seconds: 2),
-                                    ),
-                                  );
-                                },
-                                itemBuilder: (context) => [
-                                  PopupMenuItem(
-                                    value: 'bibtex',
-                                    child: Text('Salin BibTeX',
-                                        style: context.typography.bodyMedium),
-                                  ),
-                                  PopupMenuItem(
-                                    value: 'apa',
-                                    child: Text('Salin APA 7',
-                                        style: context.typography.bodyMedium),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: _buildRangkumButton(context),
                                   ),
                                 ],
-                                child: Container(
-                                  height: 36,
-                                  alignment: Alignment.center,
-                                  decoration: BoxDecoration(
-                                    color: context.colors.surface2,
-                                    borderRadius: BorderRadius.circular(6),
-                                    border: Border.all(
-                                        color: context.colors.borderSubtle),
-                                  ),
-                                  child: Row(
-                                    mainAxisAlignment: MainAxisAlignment.center,
-                                    children: [
-                                      Icon(Icons.format_quote,
-                                          size: 14,
-                                          color: context.colors.textPrimary),
-                                      const SizedBox(width: 6),
-                                      Flexible(
-                                        child: Text(
-                                          'Kutip',
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: context.typography.labelMedium
-                                              ?.copyWith(
-                                            color: context.colors.textPrimary,
-                                            fontWeight: FontWeight.w600,
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
                               ),
-                            ),
-                            if (paper.absUrl.isNotEmpty ||
-                                paper.pdfUrl.isNotEmpty) ...[
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: DynamicSourceButton(
-                                  url: paper.absUrl.isNotEmpty
-                                      ? paper.absUrl
-                                      : paper.pdfUrl,
-                                  isPdfFallback: paper.absUrl.isEmpty &&
-                                      DynamicSourceButton.isDirectPdf(
-                                          paper.pdfUrl),
-                                  isFullWidth: false,
-                                  isExpanded: true,
-                                  paper: paper,
-                                ),
+                              const SizedBox(height: 6),
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.end,
+                                children: [
+                                  _CitationIconButton(paper: paper),
+                                  if (hasUrl) ...[
+                                    const SizedBox(width: 6),
+                                    _OpenIconButton(paper: paper),
+                                  ],
+                                ],
                               ),
                             ],
+                          );
+                        }
+
+                        // Layout Satu Baris Kompak (Single Row)
+                        return Row(
+                          children: [
+                            if (hasBothPrimary) ...[
+                              Expanded(
+                                child: _buildTanyaPaperButton(context),
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: _buildRangkumButton(context),
+                              ),
+                            ] else if (hasTanyaPaper) ...[
+                              Expanded(
+                                child: _buildTanyaPaperButton(context),
+                              ),
+                            ] else if (hasRangkum) ...[
+                              Expanded(
+                                child: _buildRangkumButton(context),
+                              ),
+                            ] else ...[
+                              const Spacer(),
+                            ],
+                            const SizedBox(width: 8),
+                            _CitationIconButton(paper: paper),
+                            if (hasUrl) ...[
+                              const SizedBox(width: 6),
+                              _OpenIconButton(paper: paper),
+                            ],
                           ],
-                        ),
-                      ],
+                        );
+                      },
                     ),
                   ),
                 ],
               ),
             ),
           )),
+    );
+  }
+
+  Widget _buildTanyaPaperButton(BuildContext context) {
+    return Material(
+      color: context.colors.textPrimary,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: () {
+          HapticFeedback.lightImpact();
+          onChatPdf!();
+        },
+        child: SizedBox(
+          height: 36,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.chat_bubble_outline,
+                    size: 13, color: context.colors.surface0),
+                const SizedBox(width: 4),
+                Flexible(
+                  child: Text(
+                    'Tanya Paper',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: context.typography.labelMedium?.copyWith(
+                      color: context.colors.surface0,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 12,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildRangkumButton(BuildContext context) {
+    return PressFeedback(
+      scaleFactor: 0.96,
+      child: Material(
+        color: context.colors.surface2,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(6),
+          side: BorderSide(color: context.colors.borderSubtle),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: () {
+            HapticFeedback.lightImpact();
+            onSummarize!();
+          },
+          hoverColor: context.colors.surface3,
+          highlightColor: context.colors.surface3,
+          child: SizedBox(
+            height: 36,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.auto_stories_outlined,
+                      size: 13, color: context.colors.textPrimary),
+                  const SizedBox(width: 4),
+                  Flexible(
+                    child: Text(
+                      'Rangkum',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: context.typography.labelMedium?.copyWith(
+                        color: context.colors.textPrimary,
+                        fontWeight: FontWeight.w600,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 
@@ -472,23 +481,19 @@ class _CategoryChip extends StatelessWidget {
   }
 }
 
-class _ActionButton extends StatelessWidget {
-  final String label;
-  final IconData icon;
-  final VoidCallback onTap;
-  final bool isFullWidth;
+class _CitationIconButton extends StatelessWidget {
+  final ArxivPaper paper;
 
-  const _ActionButton({
-    required this.label,
-    required this.icon,
-    required this.onTap,
-    this.isFullWidth = false,
-  });
+  const _CitationIconButton({required this.paper});
 
   @override
   Widget build(BuildContext context) {
     return PressFeedback(
-        scaleFactor: 0.96,
+      scaleFactor: 0.94,
+      child: Semantics(
+        label: 'Kutip',
+        button: true,
+        hint: 'Salin format sitasi BibTeX atau APA 7',
         child: Material(
           color: context.colors.surface2,
           shape: RoundedRectangleBorder(
@@ -496,90 +501,121 @@ class _ActionButton extends StatelessWidget {
             side: BorderSide(color: context.colors.borderSubtle),
           ),
           clipBehavior: Clip.antiAlias,
-          child: InkWell(
-            onTap: () {
-              HapticFeedback.lightImpact();
-              onTap();
+          child: PopupMenuButton<String>(
+            tooltip: 'Kutip Makalah',
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+            onSelected: (format) {
+              if (format == 'bibtex') {
+                Clipboard.setData(ClipboardData(text: paper.bibtex));
+              } else if (format == 'apa') {
+                Clipboard.setData(ClipboardData(text: paper.apa));
+              }
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text('Sitasi $format disalin',
+                      style: context.typography.bodyMedium),
+                  backgroundColor: context.colors.surface2,
+                  duration: const Duration(seconds: 2),
+                ),
+              );
             },
-            hoverColor: context.colors.surface3,
-            highlightColor: context.colors.surface3,
+            itemBuilder: (context) => [
+              PopupMenuItem(
+                value: 'bibtex',
+                child:
+                    Text('Salin BibTeX', style: context.typography.bodyMedium),
+              ),
+              PopupMenuItem(
+                value: 'apa',
+                child:
+                    Text('Salin APA 7', style: context.typography.bodyMedium),
+              ),
+            ],
             child: SizedBox(
+              width: 36,
               height: 36,
-              width: isFullWidth ? double.infinity : null,
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 14),
-                child: Row(
-                  mainAxisSize:
-                      isFullWidth ? MainAxisSize.max : MainAxisSize.min,
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(icon, size: 14, color: context.colors.textPrimary),
-                    const SizedBox(width: 6),
-                    if (isFullWidth)
-                      Flexible(
-                        child: Text(
-                          label,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: context.typography.labelMedium?.copyWith(
-                            color: context.colors.textPrimary,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      )
-                    else
-                      Text(
-                        label,
-                        style: context.typography.labelMedium?.copyWith(
-                          color: context.colors.textPrimary,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                  ],
+              child: Center(
+                child: Icon(
+                  Icons.format_quote_rounded,
+                  size: 16,
+                  color: context.colors.textPrimary,
                 ),
               ),
             ),
           ),
-        ));
+        ),
+      ),
+    );
   }
 }
 
-class _PrimaryActionButton extends StatelessWidget {
-  final VoidCallback onTap;
+class _OpenIconButton extends StatelessWidget {
+  final ArxivPaper paper;
 
-  const _PrimaryActionButton({required this.onTap});
+  const _OpenIconButton({required this.paper});
+
+  Future<void> _launch(BuildContext context, String url) async {
+    final lowerUrl = url.toLowerCase();
+    if (DynamicSourceButton.isDirectPdf(lowerUrl)) {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => PdfViewerScreen(paper: paper, url: url),
+        ),
+      );
+      return;
+    }
+
+    final uri = Uri.parse(url);
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: context.colors.textPrimary,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: () {
-          HapticFeedback.lightImpact();
-          onTap();
-        },
-        child: SizedBox(
-          height: 36,
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(Icons.chat_bubble_outline,
-                  size: 14, color: context.colors.surface0),
-              const SizedBox(width: 6),
-              Flexible(
-                child: Text(
-                  'Tanya Paper',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: context.typography.labelMedium?.copyWith(
-                    color: context.colors.surface0,
-                    fontWeight: FontWeight.w600,
+    final url = paper.absUrl.isNotEmpty ? paper.absUrl : paper.pdfUrl;
+    if (url.isEmpty) return const SizedBox.shrink();
+
+    final isPdfFallback =
+        paper.absUrl.isEmpty && DynamicSourceButton.isDirectPdf(paper.pdfUrl);
+    final config = SourceConfig.fromUrl(url, isPdfFallback: isPdfFallback);
+    if (config == null) return const SizedBox.shrink();
+
+    return PressFeedback(
+      scaleFactor: 0.94,
+      child: Tooltip(
+        message: config.label,
+        child: Semantics(
+          label: config.label,
+          button: true,
+          child: Material(
+            color: context.colors.surface2,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(6),
+              side: BorderSide(color: context.colors.borderSubtle),
+            ),
+            clipBehavior: Clip.antiAlias,
+            child: InkWell(
+              onTap: () {
+                HapticFeedback.lightImpact();
+                _launch(context, config.url);
+              },
+              hoverColor: context.colors.surface3,
+              highlightColor: context.colors.surface3,
+              child: SizedBox(
+                width: 36,
+                height: 36,
+                child: Center(
+                  child: Icon(
+                    config.icon,
+                    size: 16,
+                    color: context.colors.textPrimary,
                   ),
                 ),
               ),
-            ],
+            ),
           ),
         ),
       ),
