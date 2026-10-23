@@ -1644,6 +1644,64 @@ class SciChatProvider extends ChangeNotifier {
     return true;
   }
 
+  /// Mengekstrak nomor halaman tervalidasi per documentId dari cache bukti leksikal PDF.
+  Map<String, List<int>> _extractValidatedCitationPages(
+      List<ArxivPaper> targetPapers) {
+    final result = <String, List<int>>{};
+    for (final p in targetPapers) {
+      final ev = _contextEvidence[p.id] ?? _paperEvidenceCache[p.id];
+      if (ev != null && ev.chunks.isNotEmpty) {
+        final pages = ev.chunks
+            .map((c) => c.pageNumber)
+            .where((page) => page != PdfChunk.kUnknownPage && page > 0)
+            .toSet()
+            .toList()
+          ..sort();
+        if (pages.isNotEmpty) {
+          result[p.id] = pages;
+        }
+      }
+    }
+    return result;
+  }
+
+  /// Mengekstrak pemetaan seksi ke nomor halaman tervalidasi per documentId dari cache bukti leksikal PDF.
+  Map<String, Map<String, int>> _extractValidatedSectionPages(
+      List<ArxivPaper> targetPapers) {
+    final result = <String, Map<String, int>>{};
+    for (final p in targetPapers) {
+      final ev = _contextEvidence[p.id] ?? _paperEvidenceCache[p.id];
+      if (ev != null && ev.chunks.isNotEmpty) {
+        final sectionMap = <String, int>{};
+        for (final c in ev.chunks) {
+          if (c.pageNumber > 0 && c.pageNumber != PdfChunk.kUnknownPage) {
+            final title = c.sectionTitle.trim().toLowerCase();
+            if (title.isNotEmpty) {
+              sectionMap[title] = c.pageNumber;
+              final numMatch = RegExp(
+                r'(?:seksi|section|bagian)?\s*(\d+(?:\.\d+)*)',
+                caseSensitive: false,
+              ).firstMatch(title);
+              if (numMatch != null) {
+                final secNum = numMatch.group(1);
+                if (secNum != null && secNum.isNotEmpty) {
+                  sectionMap[secNum] = c.pageNumber;
+                  sectionMap['seksi $secNum'] = c.pageNumber;
+                  sectionMap['section $secNum'] = c.pageNumber;
+                  sectionMap['bagian $secNum'] = c.pageNumber;
+                }
+              }
+            }
+          }
+        }
+        if (sectionMap.isNotEmpty) {
+          result[p.id] = sectionMap;
+        }
+      }
+    }
+    return result;
+  }
+
   // ── Chat ──────────────────────────────────────────────────────────────────
   Future<void> sendMessage(String text) async {
     if (text.trim().isEmpty || isLoading) return;
@@ -2090,12 +2148,20 @@ class SciChatProvider extends ChangeNotifier {
         final finishReason = _gemini.lastStreamFinishReason;
         final isTruncated = finishReason == 'length';
         final parseResult = FollowUpParser.parse(streamedContent);
+        final validatedCitationPages = _extractValidatedCitationPages(papers);
+        final validatedSectionPages = _extractValidatedSectionPages(papers);
 
         // Finalisasi saat stream selesai
         final doneMsg = thinkingMsg.copyWith(
           content: parseResult.cleanContent,
           status: MessageStatus.done,
           papers: papers,
+          validatedCitationPages: validatedCitationPages.isNotEmpty
+              ? validatedCitationPages
+              : null,
+          validatedSectionPages: validatedSectionPages.isNotEmpty
+              ? validatedSectionPages
+              : null,
           followUpSuggestions: parseResult.suggestions,
           isTruncated: isTruncated,
           finishReason: finishReason,
@@ -2132,10 +2198,20 @@ class SciChatProvider extends ChangeNotifier {
               throw Exception('Respons monolitik juga kosong');
             }
             final parseResult = FollowUpParser.parse(response);
+            final validatedCitationPages =
+                _extractValidatedCitationPages(papers);
+            final validatedSectionPages =
+                _extractValidatedSectionPages(papers);
             final doneMsg = thinkingMsg.copyWith(
               content: parseResult.cleanContent,
               status: MessageStatus.done,
               papers: papers,
+              validatedCitationPages: validatedCitationPages.isNotEmpty
+                  ? validatedCitationPages
+                  : null,
+              validatedSectionPages: validatedSectionPages.isNotEmpty
+                  ? validatedSectionPages
+                  : null,
               followUpSuggestions: parseResult.suggestions,
               isTruncated: false,
               finishReason: 'stop',
@@ -2393,11 +2469,19 @@ class SciChatProvider extends ChangeNotifier {
       final finishReason = _gemini.lastStreamFinishReason;
       final isTruncated = finishReason == 'length';
       final parseResult = FollowUpParser.parse(streamedContent);
+      final validatedCitationPages = _extractValidatedCitationPages(papers);
+      final validatedSectionPages = _extractValidatedSectionPages(papers);
 
       final doneMsg = thinkingMsg.copyWith(
         content: parseResult.cleanContent,
         status: MessageStatus.done,
         papers: papers,
+        validatedCitationPages: validatedCitationPages.isNotEmpty
+            ? validatedCitationPages
+            : null,
+        validatedSectionPages: validatedSectionPages.isNotEmpty
+            ? validatedSectionPages
+            : null,
         followUpSuggestions: parseResult.suggestions,
         isTruncated: isTruncated,
         finishReason: finishReason,
@@ -2434,10 +2518,18 @@ class SciChatProvider extends ChangeNotifier {
             throw Exception('Respons monolitik juga kosong');
           }
           final parseResult = FollowUpParser.parse(response);
+          final validatedCitationPages = _extractValidatedCitationPages(papers);
+          final validatedSectionPages = _extractValidatedSectionPages(papers);
           final doneMsg = thinkingMsg.copyWith(
             content: parseResult.cleanContent,
             status: MessageStatus.done,
             papers: papers,
+            validatedCitationPages: validatedCitationPages.isNotEmpty
+                ? validatedCitationPages
+                : null,
+            validatedSectionPages: validatedSectionPages.isNotEmpty
+                ? validatedSectionPages
+                : null,
             followUpSuggestions: parseResult.suggestions,
             isTruncated: false,
             finishReason: 'stop',

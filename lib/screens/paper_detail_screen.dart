@@ -19,7 +19,9 @@ import '../services/search_service.dart';
 import '../utils/follow_up_parser.dart';
 import '../utils/text_utils.dart';
 
+import 'dart:io' as dart_io;
 import 'package:markdown/markdown.dart' as md;
+import 'pdf_viewer_screen.dart';
 
 class PaperDetailScreen extends StatefulWidget {
   final ArxivPaper paper;
@@ -134,6 +136,18 @@ class _PaperDetailScreenState extends State<PaperDetailScreen> {
   static bool _isCategoryDuplicatingSource(
           String category, Iterable<String> sources) =>
       SourceBadge.isCategoryDuplicatingSource(category, sources);
+
+  static bool _hasValidAuthors(ArxivPaper paper) {
+    if (paper.authors.isEmpty) return false;
+    return !paper.authors.every((a) {
+      final clean = a.trim().toLowerCase();
+      return clean.isEmpty ||
+          clean == 'local file' ||
+          clean == 'local' ||
+          clean == 'unknown' ||
+          clean == 'n/a';
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -277,7 +291,35 @@ class _PaperDetailScreenState extends State<PaperDetailScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             // Sources & Categories
-            if (uniqueSources.isNotEmpty || filteredCategories.isNotEmpty)
+            if (paper.isLocal) ...[
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: context.colors.accentFaint,
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(
+                    color: context.colors.accentDim.withValues(alpha: 0.35),
+                  ),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.description_outlined,
+                        size: 14, color: context.colors.accent),
+                    const SizedBox(width: 6),
+                    Text(
+                      'PDF Lokal',
+                      style: context.typography.labelSmall?.copyWith(
+                        color: context.colors.accent,
+                        fontWeight: FontWeight.w600,
+                        fontSize: 11,
+                      ),
+                    ),
+                  ],
+                ),
+              ).animate().fadeIn(duration: 240.ms),
+            ] else if (uniqueSources.isNotEmpty || filteredCategories.isNotEmpty) ...[
               Wrap(
                 spacing: 6,
                 runSpacing: 6,
@@ -302,6 +344,7 @@ class _PaperDetailScreenState extends State<PaperDetailScreen> {
                   }),
                 ],
               ).animate().fadeIn(duration: 240.ms),
+            ],
 
             const SizedBox(height: 16),
 
@@ -320,8 +363,8 @@ class _PaperDetailScreenState extends State<PaperDetailScreen> {
 
             const SizedBox(height: 14),
 
-            // Authors — Editorial typography
-            if (paper.authors.isNotEmpty) ...[
+            // Authors — Editorial typography (hanya tampil jika valid, bukan 'Local File')
+            if (_hasValidAuthors(paper)) ...[
               Text(
                 'PENULIS',
                 style: context.typography.labelSmall?.copyWith(
@@ -344,7 +387,13 @@ class _PaperDetailScreenState extends State<PaperDetailScreen> {
             ],
 
             // Paper Metadata Section — Structured, compact academic panel
-            _PaperMetadataSection(paper: paper),
+            if (paper.isLocal)
+              _LocalPaperMetadataSection(
+                paper: paper,
+                evidence: provider.getEvidence(paper.id),
+              )
+            else
+              _PaperMetadataSection(paper: paper),
 
             const SizedBox(height: 20),
             Container(height: 1, color: context.colors.borderSubtle),
@@ -384,53 +433,111 @@ class _PaperDetailScreenState extends State<PaperDetailScreen> {
               ],
             ),
             const SizedBox(height: 10),
-            MarkdownBody(
-              data: normalizeAbstractMath(
-                _showTranslation && _translatedSummary != null
-                    ? SearchService.normalizeOpenAlexAbstract(
-                        _translatedSummary!)
-                    : (paper.isOpenAlex
-                        ? SearchService.normalizeOpenAlexAbstract(paper.summary)
-                        : paper.summary),
-              ),
-              selectable: true,
-              builders: {
-                'latex': CustomLatexElementBuilder(context),
+            Builder(
+              builder: (context) {
+                String? abstractText;
+                if (_showTranslation && _translatedSummary != null) {
+                  abstractText = SearchService.normalizeOpenAlexAbstract(
+                      _translatedSummary!);
+                } else if (paper.hasUsableAbstract &&
+                    paper.summary.trim().isNotEmpty) {
+                  abstractText = paper.isOpenAlex
+                      ? SearchService.normalizeOpenAlexAbstract(paper.summary)
+                      : paper.summary;
+                } else {
+                  // Fallback: periksa apakah bukti leksikal PDF lokal memiliki potongan abstrak
+                  final evidence = provider.getEvidence(paper.id);
+                  if (evidence != null && evidence.chunks.isNotEmpty) {
+                    final abstractChunk = evidence.chunks.cast<PdfChunk?>().firstWhere(
+                      (c) =>
+                          c != null &&
+                          c.sectionTitle.toLowerCase().contains('abstract'),
+                      orElse: () => null,
+                    );
+                    if (abstractChunk != null &&
+                        abstractChunk.text.trim().isNotEmpty) {
+                      abstractText = abstractChunk.text.trim();
+                    }
+                  }
+                }
+
+                if (abstractText != null && abstractText.trim().isNotEmpty) {
+                  return MarkdownBody(
+                    data: normalizeAbstractMath(abstractText),
+                    selectable: true,
+                    builders: {
+                      'latex': CustomLatexElementBuilder(context),
+                    },
+                    extensionSet: md.ExtensionSet(
+                      [
+                        const MathBlockSyntax(),
+                        ...md.ExtensionSet.gitHubFlavored.blockSyntaxes,
+                      ],
+                      [
+                        MathInlineSyntax(),
+                        ...md.ExtensionSet.gitHubFlavored.inlineSyntaxes,
+                      ],
+                    ),
+                    styleSheet: MarkdownStyleSheet(
+                      p: context.typography.bodyLarge,
+                      pPadding: const EdgeInsets.only(bottom: 16),
+                      strong: context.typography.bodyLarge
+                          ?.copyWith(fontWeight: FontWeight.w700),
+                      em: context.typography.bodyLarge?.copyWith(
+                          fontStyle: FontStyle.italic,
+                          color: context.colors.textSecondary),
+                      h1: context.typography.headlineLarge?.copyWith(
+                          color: context.colors.accent,
+                          fontWeight: FontWeight.bold),
+                      h1Padding: const EdgeInsets.only(top: 20, bottom: 8),
+                      h2: context.typography.headlineMedium?.copyWith(
+                          color: context.colors.accent,
+                          fontWeight: FontWeight.w600),
+                      h2Padding: const EdgeInsets.only(top: 18, bottom: 8),
+                      h3: context.typography.headlineSmall?.copyWith(
+                          color: context.colors.textPrimary,
+                          fontWeight: FontWeight.w600),
+                      h3Padding: const EdgeInsets.only(top: 14, bottom: 6),
+                      h4: context.typography.titleMedium?.copyWith(
+                          color: context.colors.textPrimary,
+                          fontWeight: FontWeight.w600),
+                      h4Padding: const EdgeInsets.only(top: 12, bottom: 4),
+                    ),
+                  ).animate(delay: 80.ms).fadeIn(duration: 400.ms);
+                }
+
+                // Fallback UI yang jelas saat abstrak tidak tersedia
+                return Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 16, vertical: 14),
+                  decoration: BoxDecoration(
+                    color: context.colors.surface1,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: context.colors.borderSubtle),
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(Icons.info_outline,
+                          size: 18, color: context.colors.textMuted),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          paper.isLocal
+                              ? 'Abstrak terpisah tidak terdeteksi pada berkas PDF lokal ini. Anda dapat menggunakan aksi "Rangkum" untuk membuat ringkasan AI langsung dari isi dokumen.'
+                              : 'Abstrak tidak tersedia untuk dokumen ini.',
+                          style: context.typography.bodySmall?.copyWith(
+                            color: context.colors.textSecondary,
+                            height: 1.45,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ).animate(delay: 80.ms).fadeIn(duration: 300.ms);
               },
-              extensionSet: md.ExtensionSet(
-                [
-                  const MathBlockSyntax(),
-                  ...md.ExtensionSet.gitHubFlavored.blockSyntaxes,
-                ],
-                [
-                  MathInlineSyntax(),
-                  ...md.ExtensionSet.gitHubFlavored.inlineSyntaxes,
-                ],
-              ),
-              styleSheet: MarkdownStyleSheet(
-                p: context.typography.bodyLarge,
-                pPadding: const EdgeInsets.only(bottom: 16),
-                strong: context.typography.bodyLarge
-                    ?.copyWith(fontWeight: FontWeight.w700),
-                em: context.typography.bodyLarge?.copyWith(
-                    fontStyle: FontStyle.italic,
-                    color: context.colors.textSecondary),
-                h1: context.typography.headlineLarge?.copyWith(
-                    color: context.colors.accent, fontWeight: FontWeight.bold),
-                h1Padding: const EdgeInsets.only(top: 20, bottom: 8),
-                h2: context.typography.headlineMedium?.copyWith(
-                    color: context.colors.accent, fontWeight: FontWeight.w600),
-                h2Padding: const EdgeInsets.only(top: 18, bottom: 8),
-                h3: context.typography.headlineSmall?.copyWith(
-                    color: context.colors.textPrimary,
-                    fontWeight: FontWeight.w600),
-                h3Padding: const EdgeInsets.only(top: 14, bottom: 6),
-                h4: context.typography.titleMedium?.copyWith(
-                    color: context.colors.textPrimary,
-                    fontWeight: FontWeight.w600),
-                h4Padding: const EdgeInsets.only(top: 12, bottom: 4),
-              ),
-            ).animate(delay: 80.ms).fadeIn(duration: 400.ms),
+            ),
 
             PaperFigures(shortId: paper.shortId),
 
@@ -540,6 +647,178 @@ class _PaperMetadataSection extends StatelessWidget {
               copyTooltip: 'Salin DOI',
               copiedMessage: 'DOI disalin',
             ),
+        ],
+      ),
+    );
+  }
+}
+
+class _LocalPaperMetadataSection extends StatelessWidget {
+  final ArxivPaper paper;
+  final PaperEvidence? evidence;
+
+  const _LocalPaperMetadataSection({
+    required this.paper,
+    this.evidence,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    String? fileSizeStr;
+    String filePath = '';
+    if (paper.pdfUrl.startsWith('file://')) {
+      filePath = paper.pdfUrl.replaceFirst('file://', '');
+      try {
+        final file = dart_io.File(filePath);
+        if (file.existsSync()) {
+          final bytes = file.lengthSync();
+          if (bytes >= 1024 * 1024) {
+            fileSizeStr = '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+          } else if (bytes >= 1024) {
+            fileSizeStr = '${(bytes / 1024).toStringAsFixed(0)} KB';
+          } else {
+            fileSizeStr = '$bytes B';
+          }
+        }
+      } catch (_) {}
+    }
+
+    int? pageCount;
+    if (evidence != null && evidence!.chunks.isNotEmpty) {
+      final pages = evidence!.chunks
+          .map((c) => c.pageNumber)
+          .where((p) => p > 0 && p != PdfChunk.kUnknownPage)
+          .toSet();
+      if (pages.isNotEmpty) {
+        pageCount = pages.length;
+      }
+    }
+
+    // Determine status
+    final String statusTitle;
+    final String statusSubtitle;
+    final IconData statusIcon;
+    final Color statusColor;
+
+    if (evidence != null) {
+      if (evidence!.level == EvidenceLevel.fullText) {
+        statusTitle = 'Teks Lengkap Siap';
+        statusSubtitle = '${evidence!.chunks.length} bagian teks terindeks';
+        statusIcon = Icons.check_circle_outline;
+        statusColor = context.colors.accent;
+      } else if (evidence!.level == EvidenceLevel.abstractOnly) {
+        statusTitle = 'Hanya Abstrak';
+        statusSubtitle = 'Teks dokumen tidak dapat diekstrak';
+        statusIcon = Icons.article_outlined;
+        statusColor = context.colors.textSecondary;
+      } else {
+        statusTitle = 'Teks Tidak Terdeteksi';
+        statusSubtitle = 'Mungkin PDF berbasis gambar / hasil scan';
+        statusIcon = Icons.warning_amber_outlined;
+        statusColor = context.colors.tagEcon;
+      }
+    } else {
+      statusTitle = 'Siap Dianalisis';
+      statusSubtitle = 'Ekstraksi otomatis saat bertanya atau merangkum';
+      statusIcon = Icons.auto_awesome_outlined;
+      statusColor = context.colors.accent;
+    }
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      decoration: BoxDecoration(
+        color: context.colors.surface1,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: context.colors.borderSubtle),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: statusColor.withValues(alpha: 0.12),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(statusIcon, size: 18, color: statusColor),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      statusTitle,
+                      style: context.typography.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w600,
+                        color: context.colors.textPrimary,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      statusSubtitle,
+                      style: context.typography.bodySmall?.copyWith(
+                        color: context.colors.textSecondary,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 12),
+            child: Divider(height: 1, thickness: 1),
+          ),
+          Wrap(
+            spacing: 24,
+            runSpacing: 12,
+            children: [
+              if (fileSizeStr != null)
+                _MetaField(
+                  label: 'UKURAN BERKAS',
+                  value: fileSizeStr,
+                ),
+              if (pageCount != null)
+                _MetaField(
+                  label: 'HALAMAN TERINDEKS',
+                  value: '$pageCount hal',
+                ),
+              if (paper.formattedDate.trim().isNotEmpty)
+                _MetaField(
+                  label: 'DITAMBAHKAN',
+                  value: paper.formattedDate,
+                ),
+              const _MetaField(
+                label: 'SUMBER DOKUMEN',
+                value: 'PDF Dokumen Lokal',
+              ),
+            ],
+          ),
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 12),
+            child: Divider(height: 1, thickness: 1),
+          ),
+          _IdentifierRow(
+            label: 'ID DOKUMEN',
+            value: paper.id,
+            copyTooltip: 'Salin ID Dokumen',
+            copiedMessage: 'ID Dokumen disalin',
+          ),
+          if (filePath.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            _IdentifierRow(
+              label: 'LOKASI BERKAS',
+              value: filePath,
+              copyTooltip: 'Salin Jalur Berkas',
+              copiedMessage: 'Jalur berkas disalin',
+            ),
+          ],
         ],
       ),
     );
@@ -676,9 +955,22 @@ class _ActionButtons extends StatelessWidget {
     required this.onChatPdf,
   });
 
+  void _openPdfViewer(BuildContext context) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => PdfViewerScreen.fromPaper(paper: paper),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final provider = context.watch<SciChatProvider>();
+    final isSaved = provider.isFavorite(paper.id);
     final bool hasDirectPdf = DynamicSourceButton.isDirectPdf(paper.pdfUrl);
+    final bool canOpenPdfViewer = paper.isLocal || hasDirectPdf;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -686,107 +978,224 @@ class _ActionButtons extends StatelessWidget {
           children: [
             Expanded(
               child: PressFeedback(
-                  scaleFactor: 0.97,
-                  child: Material(
-                    color: context.colors.textPrimary,
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8)),
-                    clipBehavior: Clip.antiAlias,
-                    child: InkWell(
-                      onTap: () {
-                        HapticFeedback.lightImpact();
-                        onChatPdf();
-                      },
-                      child: Container(
-                        height: 48,
-                        alignment: Alignment.center,
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(Icons.chat_bubble_outline,
-                                size: 18, color: context.colors.surface0),
-                            const SizedBox(width: 8),
-                            Flexible(
-                              child: Text(
-                                'Tanya Paper',
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: context.typography.labelMedium?.copyWith(
-                                  color: context.colors.surface0,
-                                  fontWeight: FontWeight.w600,
-                                  fontSize: 14,
-                                ),
+                scaleFactor: 0.97,
+                child: Material(
+                  color: context.colors.textPrimary,
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8)),
+                  clipBehavior: Clip.antiAlias,
+                  child: InkWell(
+                    onTap: () {
+                      HapticFeedback.lightImpact();
+                      onChatPdf();
+                    },
+                    child: Container(
+                      height: 48,
+                      alignment: Alignment.center,
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.chat_bubble_outline,
+                              size: 18, color: context.colors.surface0),
+                          const SizedBox(width: 8),
+                          Flexible(
+                            child: Text(
+                              'Tanya Paper',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: context.typography.labelMedium?.copyWith(
+                                color: context.colors.surface0,
+                                fontWeight: FontWeight.w600,
+                                fontSize: 14,
                               ),
                             ),
-                          ],
-                        ),
+                          ),
+                        ],
                       ),
                     ),
-                  )),
+                  ),
+                ),
+              ),
             ),
             const SizedBox(width: 12),
             Expanded(
               child: PressFeedback(
-                  scaleFactor: 0.97,
-                  child: Material(
-                    color: context.colors.surface2,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8),
-                      side: BorderSide(color: context.colors.borderMedium),
-                    ),
-                    clipBehavior: Clip.antiAlias,
-                    child: InkWell(
-                      onTap: () {
-                        HapticFeedback.lightImpact();
-                        onSummarize();
-                      },
-                      child: Container(
-                        height: 48,
-                        alignment: Alignment.center,
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(Icons.auto_stories_outlined,
-                                size: 18, color: context.colors.textPrimary),
-                            const SizedBox(width: 8),
-                            Flexible(
-                              child: Text(
-                                'Rangkum',
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: context.typography.labelMedium?.copyWith(
-                                  color: context.colors.textPrimary,
-                                  fontWeight: FontWeight.w600,
-                                  fontSize: 14,
-                                ),
+                scaleFactor: 0.97,
+                child: Material(
+                  color: context.colors.surface2,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    side: BorderSide(color: context.colors.borderMedium),
+                  ),
+                  clipBehavior: Clip.antiAlias,
+                  child: InkWell(
+                    onTap: () {
+                      HapticFeedback.lightImpact();
+                      onSummarize();
+                    },
+                    child: Container(
+                      height: 48,
+                      alignment: Alignment.center,
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.auto_stories_outlined,
+                              size: 18, color: context.colors.textPrimary),
+                          const SizedBox(width: 8),
+                          Flexible(
+                            child: Text(
+                              'Rangkum',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: context.typography.labelMedium?.copyWith(
+                                color: context.colors.textPrimary,
+                                fontWeight: FontWeight.w600,
+                                fontSize: 14,
                               ),
                             ),
-                          ],
-                        ),
+                          ),
+                        ],
                       ),
                     ),
-                  )),
+                  ),
+                ),
+              ),
             ),
           ],
         ),
-        const SizedBox(height: 24),
-        if (paper.absUrl.isNotEmpty)
-          DynamicSourceButton(
-            url: paper.absUrl,
-            isFullWidth: true,
-            isPrimary: false,
-            paper: paper,
+        const SizedBox(height: 12),
+
+        // Baca PDF / Open PDF button
+        if (canOpenPdfViewer) ...[
+          PressFeedback(
+            scaleFactor: 0.98,
+            child: Material(
+              color: context.colors.surface2,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+                side: BorderSide(color: context.colors.borderMedium),
+              ),
+              clipBehavior: Clip.antiAlias,
+              child: InkWell(
+                onTap: () {
+                  HapticFeedback.lightImpact();
+                  _openPdfViewer(context);
+                },
+                child: Container(
+                  height: 48,
+                  alignment: Alignment.center,
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(Icons.picture_as_pdf_outlined,
+                          size: 18, color: context.colors.textPrimary),
+                      const SizedBox(width: 8),
+                      Text(
+                        paper.isLocal ? 'Baca PDF' : 'Open PDF',
+                        style: context.typography.labelMedium?.copyWith(
+                          color: context.colors.textPrimary,
+                          fontWeight: FontWeight.w600,
+                          fontSize: 14,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
           ),
-        if (paper.pdfUrl.isNotEmpty &&
-            (hasDirectPdf || paper.pdfUrl != paper.absUrl)) ...[
-          if (paper.absUrl.isNotEmpty) const SizedBox(height: 10),
-          DynamicSourceButton(
-            url: paper.pdfUrl,
-            isPdfFallback: hasDirectPdf,
-            isFullWidth: true,
-            isPrimary: false,
-            paper: paper,
+          const SizedBox(height: 12),
+        ],
+
+        // Simpan ke Library / Pustaka Button
+        PressFeedback(
+          scaleFactor: 0.98,
+          child: Material(
+            color: isSaved ? context.colors.accentFaint : context.colors.surface1,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(8),
+              side: BorderSide(
+                color: isSaved
+                    ? context.colors.accentDim.withValues(alpha: 0.5)
+                    : context.colors.borderMedium,
+              ),
+            ),
+            clipBehavior: Clip.antiAlias,
+            child: InkWell(
+              onTap: () {
+                HapticFeedback.lightImpact();
+                provider.toggleFavorite(paper);
+                ScaffoldMessenger.of(context).hideCurrentSnackBar();
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      isSaved
+                          ? 'Dihapus dari Pustaka'
+                          : 'Disimpan ke Pustaka (Library)',
+                      style: context.typography.bodyMedium,
+                    ),
+                    backgroundColor: context.colors.surface2,
+                    behavior: SnackBarBehavior.floating,
+                    duration: const Duration(seconds: 2),
+                  ),
+                );
+              },
+              child: Container(
+                height: 48,
+                alignment: Alignment.center,
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      isSaved ? Icons.bookmark : Icons.bookmark_add_outlined,
+                      size: 18,
+                      color: isSaved
+                          ? context.colors.accent
+                          : context.colors.textSecondary,
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      isSaved
+                          ? 'Tersimpan di Pustaka (Library)'
+                          : 'Simpan ke Pustaka (Library)',
+                      style: context.typography.labelMedium?.copyWith(
+                        color: isSaved
+                            ? context.colors.accent
+                            : context.colors.textPrimary,
+                        fontWeight: FontWeight.w600,
+                        fontSize: 14,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
           ),
+        ),
+
+        // Web sources fallback for online papers (e.g. arXiv, OpenAlex)
+        if (!paper.isLocal) ...[
+          if (paper.absUrl.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            DynamicSourceButton(
+              url: paper.absUrl,
+              isFullWidth: true,
+              isPrimary: false,
+              paper: paper,
+            ),
+          ],
+          if (paper.pdfUrl.isNotEmpty &&
+              !hasDirectPdf &&
+              paper.pdfUrl != paper.absUrl) ...[
+            const SizedBox(height: 10),
+            DynamicSourceButton(
+              url: paper.pdfUrl,
+              isPdfFallback: false,
+              isFullWidth: true,
+              isPrimary: false,
+              paper: paper,
+            ),
+          ],
         ],
       ],
     );

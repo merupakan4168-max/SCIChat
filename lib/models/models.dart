@@ -602,6 +602,8 @@ class ChatMessage {
   final ChatErrorType? errorType;
   final bool isTruncated;
   final String? finishReason;
+  final Map<String, List<int>>? validatedCitationPages; // validated citation pages per documentId
+  final Map<String, Map<String, int>>? validatedSectionPages; // validated section-to-page mappings per documentId
 
   const ChatMessage({
     required this.id,
@@ -615,6 +617,8 @@ class ChatMessage {
     this.errorType,
     this.isTruncated = false,
     this.finishReason,
+    this.validatedCitationPages,
+    this.validatedSectionPages,
   });
 
   ChatMessage copyWith({
@@ -625,6 +629,8 @@ class ChatMessage {
     ChatErrorType? errorType,
     bool? isTruncated,
     String? finishReason,
+    Map<String, List<int>>? validatedCitationPages,
+    Map<String, Map<String, int>>? validatedSectionPages,
   }) =>
       ChatMessage(
         id: id,
@@ -638,6 +644,10 @@ class ChatMessage {
         errorType: errorType ?? this.errorType,
         isTruncated: isTruncated ?? this.isTruncated,
         finishReason: finishReason ?? this.finishReason,
+        validatedCitationPages:
+            validatedCitationPages ?? this.validatedCitationPages,
+        validatedSectionPages:
+            validatedSectionPages ?? this.validatedSectionPages,
       );
 
   bool get isUser => role == MessageRole.user;
@@ -655,6 +665,10 @@ class ChatMessage {
         'errorType': errorType?.toString(),
         'isTruncated': isTruncated,
         'finishReason': finishReason,
+        if (validatedCitationPages != null)
+          'validatedCitationPages': validatedCitationPages,
+        if (validatedSectionPages != null)
+          'validatedSectionPages': validatedSectionPages,
       };
 
   factory ChatMessage.fromJson(Map<String, dynamic> j) => ChatMessage(
@@ -683,6 +697,20 @@ class ChatMessage {
               ),
         isTruncated: j['isTruncated'] == true,
         finishReason: j['finishReason'] as String?,
+        validatedCitationPages: (j['validatedCitationPages'] as Map?)?.map(
+          (k, v) => MapEntry(
+            k.toString(),
+            (v as List).map((e) => (e as num).toInt()).toList(),
+          ),
+        ),
+        validatedSectionPages: (j['validatedSectionPages'] as Map?)?.map(
+          (k, v) => MapEntry(
+            k.toString(),
+            (v as Map).map(
+              (sk, sv) => MapEntry(sk.toString(), (sv as num).toInt()),
+            ),
+          ),
+        ),
       );
 }
 
@@ -1001,3 +1029,477 @@ class PaperTranslation {
   @override
   String toString() => 'PaperTranslation(title: $title, summary: $summary)';
 }
+
+/// Tipe sumber konten dokumen PDF untuk viewer SCIChat.
+enum DocumentSourceType {
+  localFile,
+  memoryBytes,
+  networkUrl,
+}
+
+/// Model konteks dokumen PDF interaktif untuk viewer SCIChat.
+///
+/// Memisahkan representasi dokumen dan state pembacaan (halaman saat ini, total halaman)
+/// dari [PdfService] dan [SciChatProvider].
+///
+/// Mencegah percampuran konteks pembacaan antar dokumen berbeda dengan menetapkan
+/// [documentId] unik untuk setiap sesi dokumen.
+class PdfDocumentContext {
+  /// Identitas unik dokumen (misal: ID paper arXiv, hash berkas, atau UUID lokal).
+  final String documentId;
+
+  /// Judul dokumen yang dapat ditampilkan pada antarmuka pembaca.
+  final String title;
+
+  /// Tipe sumber konten dokumen.
+  final DocumentSourceType sourceType;
+
+  /// Lokasi berkas pada sistem berkas lokal jika [sourceType] adalah [DocumentSourceType.localFile].
+  final String? filePath;
+
+  /// URL daring jika [sourceType] adalah [DocumentSourceType.networkUrl].
+  final String? url;
+
+  /// Data byte biner jika [sourceType] adalah [DocumentSourceType.memoryBytes].
+  final Uint8List? bytes;
+
+  /// Jumlah halaman total dokumen (diketahui setelah viewer berhasil memuat dokumen).
+  final int? pageCount;
+
+  /// Halaman dokumen saat ini yang sedang aktif dilihat oleh pembaca (1-indexed).
+  final int currentPage;
+
+  /// Halaman awal saat dokumen dibuka (1-indexed). Digunakan untuk navigasi sitasi langsung ke halaman target.
+  final int initialPage;
+
+  /// Referensi objek makalah [ArxivPaper] terkait (jika dokumen berasal dari makalah).
+  final ArxivPaper? paper;
+
+  const PdfDocumentContext({
+    required this.documentId,
+    required this.title,
+    required this.sourceType,
+    this.filePath,
+    this.url,
+    this.bytes,
+    this.pageCount,
+    this.currentPage = 1,
+    this.initialPage = 1,
+    this.paper,
+  });
+
+  /// Membuat [PdfDocumentContext] dari objek [ArxivPaper].
+  ///
+  /// Secara otomatis membedakan berkas PDF lokal (dimulai dengan `file://`)
+  /// dengan URL daring (dimulai dengan `http://` atau `https://`).
+  factory PdfDocumentContext.fromPaper(
+    ArxivPaper paper, {
+    String? overrideUrl,
+    int initialPage = 1,
+  }) {
+    final effectiveUrl = (overrideUrl != null && overrideUrl.trim().isNotEmpty)
+        ? overrideUrl.trim()
+        : paper.pdfUrl.trim();
+
+    if (paper.isLocal || effectiveUrl.startsWith('file://')) {
+      final cleanPath = normalizeFilePath(effectiveUrl);
+      return PdfDocumentContext(
+        documentId: paper.id,
+        title: paper.title,
+        sourceType: DocumentSourceType.localFile,
+        filePath: cleanPath,
+        initialPage: initialPage,
+        currentPage: initialPage > 0 ? initialPage : 1,
+        paper: paper,
+      );
+    }
+
+    return PdfDocumentContext(
+      documentId: paper.id,
+      title: paper.title,
+      sourceType: DocumentSourceType.networkUrl,
+      url: effectiveUrl,
+      initialPage: initialPage,
+      currentPage: initialPage > 0 ? initialPage : 1,
+      paper: paper,
+    );
+  }
+
+  /// Membuat [PdfDocumentContext] dari berkas lokal.
+  factory PdfDocumentContext.fromFile({
+    required String filePath,
+    required String title,
+    String? documentId,
+    ArxivPaper? paper,
+    int initialPage = 1,
+  }) {
+    final cleanPath = normalizeFilePath(filePath);
+    return PdfDocumentContext(
+      documentId: documentId ?? 'file_${cleanPath.hashCode}',
+      title: title,
+      sourceType: DocumentSourceType.localFile,
+      filePath: cleanPath,
+      initialPage: initialPage,
+      currentPage: initialPage > 0 ? initialPage : 1,
+      paper: paper,
+    );
+  }
+
+  /// Membuat [PdfDocumentContext] dari byte biner dalam memori.
+  factory PdfDocumentContext.fromBytes({
+    required Uint8List bytes,
+    required String title,
+    required String documentId,
+    ArxivPaper? paper,
+    int initialPage = 1,
+  }) {
+    return PdfDocumentContext(
+      documentId: documentId,
+      title: title,
+      sourceType: DocumentSourceType.memoryBytes,
+      bytes: bytes,
+      initialPage: initialPage,
+      currentPage: initialPage > 0 ? initialPage : 1,
+      paper: paper,
+    );
+  }
+
+  /// Normalisasi path berkas lokal dari format URI atau format sistem operasi.
+  static String normalizeFilePath(String raw) {
+    var p = raw.trim();
+    if (p.startsWith('file://')) {
+      p = p.substring(7);
+      // Pada Windows: file:///C:/path -> C:/path
+      if (p.startsWith('/') && p.length > 2 && p[2] == ':') {
+        p = p.substring(1);
+      }
+    }
+    return p;
+  }
+
+  /// Apakah sumber dokumen ini memiliki parameter lokasi atau byte yang valid.
+  bool get isValid {
+    switch (sourceType) {
+      case DocumentSourceType.localFile:
+        return filePath != null && filePath!.trim().isNotEmpty;
+      case DocumentSourceType.networkUrl:
+        return url != null && url!.trim().isNotEmpty;
+      case DocumentSourceType.memoryBytes:
+        return bytes != null && bytes!.isNotEmpty;
+    }
+  }
+
+  PdfDocumentContext copyWith({
+    String? documentId,
+    String? title,
+    DocumentSourceType? sourceType,
+    String? filePath,
+    String? url,
+    Uint8List? bytes,
+    int? pageCount,
+    int? currentPage,
+    int? initialPage,
+    ArxivPaper? paper,
+  }) {
+    return PdfDocumentContext(
+      documentId: documentId ?? this.documentId,
+      title: title ?? this.title,
+      sourceType: sourceType ?? this.sourceType,
+      filePath: filePath ?? this.filePath,
+      url: url ?? this.url,
+      bytes: bytes ?? this.bytes,
+      pageCount: pageCount ?? this.pageCount,
+      currentPage: currentPage ?? this.currentPage,
+      initialPage: initialPage ?? this.initialPage,
+      paper: paper ?? this.paper,
+    );
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is PdfDocumentContext &&
+          runtimeType == other.runtimeType &&
+          documentId == other.documentId &&
+          title == other.title &&
+          sourceType == other.sourceType &&
+          filePath == other.filePath &&
+          url == other.url &&
+          pageCount == other.pageCount &&
+          currentPage == other.currentPage &&
+          initialPage == other.initialPage &&
+          paper == other.paper;
+
+  @override
+  int get hashCode => Object.hash(
+        documentId,
+        title,
+        sourceType,
+        filePath,
+        url,
+        pageCount,
+        currentPage,
+        initialPage,
+        paper,
+      );
+
+  @override
+  String toString() =>
+      'PdfDocumentContext(id: $documentId, title: $title, source: $sourceType, page: $currentPage/${pageCount ?? "?"}, initial: $initialPage)';
+}
+
+/// Merepresentasikan referensi sitasi akademik menuju dokumen PDF dan nomor halaman atau nomor ordinal tertentu.
+class CitationReference {
+  /// Identitas unik dokumen sumber (misal: ID paper arXiv atau ID berkas lokal).
+  final String documentId;
+
+  /// Judul dokumen sumber.
+  final String documentTitle;
+
+  /// Nomor halaman PDF yang tervalidasi (1-indexed), atau null jika sitasi tingkat paper.
+  final int? pageNumber;
+
+  /// Nomor ordinal sumber dalam daftar lampiran (1-indexed), atau null jika bukan sitasi ordinal.
+  final int? ordinal;
+
+  /// Objek paper arXiv atau dokumen terkait.
+  final ArxivPaper paper;
+
+  /// Teks mentah sitasi dalam teks jawaban AI (misal: "[Halaman 4]", "[Paper 1, Hal. 4]", atau "[1]").
+  final String rawText;
+
+  const CitationReference({
+    required this.documentId,
+    required this.documentTitle,
+    this.pageNumber,
+    this.ordinal,
+    required this.paper,
+    required this.rawText,
+  });
+
+  /// Mengonversi referensi menjadi URI tautan sitasi internal SCIChat:
+  /// `scichat-cite://<documentId>?page=<pageNumber>&ordinal=<ordinal>`
+  Uri toUri() {
+    final cleanDocId = Uri.encodeComponent(documentId);
+    final params = <String, String>{};
+    if (pageNumber != null) {
+      params['page'] = pageNumber.toString();
+    }
+    if (ordinal != null) {
+      params['ordinal'] = ordinal.toString();
+    }
+    final query = params.isNotEmpty
+        ? '?${params.entries.map((e) => '${e.key}=${Uri.encodeComponent(e.value)}').join('&')}'
+        : '';
+    return Uri.parse('scichat-cite://$cleanDocId$query');
+  }
+
+  /// Membuat [CitationReference] dari URI internal `scichat-cite://`.
+  static CitationReference? fromUri(Uri uri, List<ArxivPaper> availablePapers) {
+    if (uri.scheme != 'scichat-cite') return null;
+    final hostOrPath =
+        uri.host.isNotEmpty ? uri.host : uri.path.replaceAll('/', '');
+    final docId = Uri.decodeComponent(hostOrPath);
+    if (docId.isEmpty) return null;
+
+    final pageStr = uri.queryParameters['page'];
+    final page = int.tryParse(pageStr ?? '');
+
+    final ordinalStr = uri.queryParameters['ordinal'];
+    final ordinal = int.tryParse(ordinalStr ?? '');
+
+    // Tautan valid jika memiliki parameter page ATAU ordinal
+    if (page == null && ordinal == null) return null;
+
+    final paper = availablePapers.firstWhere(
+      (p) => p.id == docId,
+      orElse: () => availablePapers.firstWhere(
+        (p) =>
+            p.id.toLowerCase() == docId.toLowerCase() ||
+            p.title.toLowerCase().contains(docId.toLowerCase()),
+        orElse: () => ArxivPaper(
+          id: docId,
+          title: docId,
+          authors: const [],
+          summary: '',
+          published: '',
+          updated: '',
+          categories: const [],
+          pdfUrl: '',
+          absUrl: '',
+        ),
+      ),
+    );
+
+    final rawText = page != null
+        ? 'Halaman $page'
+        : (ordinal != null ? '[$ordinal]' : paper.title);
+
+    return CitationReference(
+      documentId: paper.id,
+      documentTitle: paper.title,
+      pageNumber: page,
+      ordinal: ordinal,
+      paper: paper,
+      rawText: rawText,
+    );
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is CitationReference &&
+          runtimeType == other.runtimeType &&
+          documentId == other.documentId &&
+          pageNumber == other.pageNumber &&
+          ordinal == other.ordinal &&
+          paper == other.paper;
+
+  @override
+  int get hashCode => Object.hash(documentId, pageNumber, ordinal, paper);
+
+  @override
+  String toString() =>
+      'CitationReference(doc: $documentId, ordinal: $ordinal, page: $pageNumber, title: $documentTitle)';
+}
+
+/// Aksi yang dapat diminta pengguna terhadap teks yang dipilih pada pembaca PDF.
+enum HighlightAction {
+  explain,
+  summarize,
+  customPrompt,
+}
+
+/// Model konteks cuplikan teks yang dipilih dari dokumen PDF untuk fitur Highlight-to-Ask.
+///
+/// Menyimpan teks terpilih, identitas dokumen ([documentId]), judul dokumen ([documentTitle]),
+/// nomor halaman sumber jika tersedia ([pageNumber]), dan posisi koordinat layar ([selectedRegion]).
+///
+/// Menjamin bahwa cuplikan teks tidak pernah tercampur dengan metadata dokumen lain.
+class SelectedTextContext {
+  /// Teks yang diseleksi oleh pengguna.
+  final String text;
+
+  /// Identitas unik dokumen sumber (misal: ID paper arXiv atau hash file).
+  final String documentId;
+
+  /// Judul dokumen sumber.
+  final String documentTitle;
+
+  /// Nomor halaman dokumen tempat teks berada (1-indexed), atau null jika tidak dapat dipastikan.
+  final int? pageNumber;
+
+  /// Wilayah koordinat global seleksi teks pada layar (jika tersedia dari viewer).
+  final Rect? selectedRegion;
+
+  /// Referensi objek makalah terkait jika ada.
+  final ArxivPaper? paper;
+
+  const SelectedTextContext({
+    required this.text,
+    required this.documentId,
+    required this.documentTitle,
+    this.pageNumber,
+    this.selectedRegion,
+    this.paper,
+  });
+
+  /// Batas maksimum karakter teks terpilih yang diizinkan untuk dikirim sebagai cuplikan fokus.
+  static const int kMaxSelectionChars = 2000;
+
+  /// Apakah seleksi teks valid (tidak kosong dan berada dalam batas panjang yang wajar).
+  bool get isValid =>
+      text.trim().isNotEmpty && text.trim().length <= kMaxSelectionChars;
+
+  /// Apakah teks seleksi kosong atau hanya spasi.
+  bool get isEmpty => text.trim().isEmpty;
+
+  /// Apakah teks melebihi batas panjang maksimum yang wajar.
+  bool get isTooLong => text.trim().length > kMaxSelectionChars;
+
+  /// Menghasilkan prompt terstruktur untuk dikirimkan ke asisten AI dengan atribusi jujur.
+  String formatPromptForAction(HighlightAction action, {String? customQuestion}) {
+    final cleanText = text.trim();
+    final pageInfo = (pageNumber != null && pageNumber! > 0)
+        ? ' (Halaman $pageNumber)'
+        : '';
+
+    final buffer = StringBuffer();
+    switch (action) {
+      case HighlightAction.explain:
+        buffer.writeln(
+            'Mohon jelaskan bagian teks berikut dari dokumen "$documentTitle"$pageInfo:');
+        buffer.writeln();
+        buffer.writeln('> "$cleanText"');
+        buffer.writeln();
+        buffer.writeln(
+            'Berikan penjelasan yang mendalam dan mudah dipahami berdasarkan konteks dokumen tersebut.');
+        break;
+      case HighlightAction.summarize:
+        buffer.writeln(
+            'Mohon ringkas bagian teks berikut dari dokumen "$documentTitle"$pageInfo:');
+        buffer.writeln();
+        buffer.writeln('> "$cleanText"');
+        buffer.writeln();
+        buffer.writeln('Sajikan poin-poin inti ringkasan secara ringkas dan padat.');
+        break;
+      case HighlightAction.customPrompt:
+        final question =
+            (customQuestion != null && customQuestion.trim().isNotEmpty)
+                ? customQuestion.trim()
+                : 'Jelaskan kutipan ini.';
+        buffer.writeln(
+            'Mengenai kutipan teks berikut dari dokumen "$documentTitle"$pageInfo:');
+        buffer.writeln();
+        buffer.writeln('> "$cleanText"');
+        buffer.writeln();
+        buffer.writeln('Pertanyaan: $question');
+        break;
+    }
+    return buffer.toString().trim();
+  }
+
+  SelectedTextContext copyWith({
+    String? text,
+    String? documentId,
+    String? documentTitle,
+    int? pageNumber,
+    Rect? selectedRegion,
+    ArxivPaper? paper,
+  }) {
+    return SelectedTextContext(
+      text: text ?? this.text,
+      documentId: documentId ?? this.documentId,
+      documentTitle: documentTitle ?? this.documentTitle,
+      pageNumber: pageNumber ?? this.pageNumber,
+      selectedRegion: selectedRegion ?? this.selectedRegion,
+      paper: paper ?? this.paper,
+    );
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is SelectedTextContext &&
+          runtimeType == other.runtimeType &&
+          text == other.text &&
+          documentId == other.documentId &&
+          documentTitle == other.documentTitle &&
+          pageNumber == other.pageNumber &&
+          paper == other.paper;
+
+  @override
+  int get hashCode => Object.hash(
+        text,
+        documentId,
+        documentTitle,
+        pageNumber,
+        paper,
+      );
+
+  @override
+  String toString() =>
+      'SelectedTextContext(docId: $documentId, page: $pageNumber, len: ${text.length})';
+}
+
+
