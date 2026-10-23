@@ -208,6 +208,22 @@ class StorageService {
     return '${query}_${filter.category ?? 'all'}_${filter.maxResults}_${filter.sortBy}';
   }
 
+  /// Menghapus seluruh entri cache hasil pencarian makalah dari SharedPreferences.
+  /// Secara aman HANYA menghapus key yang memiliki awalan `scichat_cache_`.
+  /// Tidak pernah menghapus markah, catatan, riwayat, atau API Key pengguna.
+  Future<int> clearSearchCache() async {
+    final prefs = await SharedPreferences.getInstance();
+    const cachePrefix = '${_cacheKey}_';
+    final keysToDelete = prefs
+        .getKeys()
+        .where((key) => key.startsWith(cachePrefix))
+        .toList();
+    for (final key in keysToDelete) {
+      await prefs.remove(key);
+    }
+    return keysToDelete.length;
+  }
+
   // ── SearchFilter Persistence ──────────────────────────────────────────────
   Future<void> saveSearchFilter(SearchFilter filter) async {
     final prefs = await SharedPreferences.getInstance();

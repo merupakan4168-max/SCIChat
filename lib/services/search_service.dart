@@ -81,6 +81,11 @@ class SearchService {
   /// Diagnostics of the most recent [search] call.
   SearchDiagnostics lastDiagnostics = SearchDiagnostics();
 
+  /// Membersihkan cache in-memory sementara untuk file arsip.
+  void clearMemoryCache() {
+    _archiveFilesCache.clear();
+  }
+
   SearchService({
     http.Client? client,
     Future<void> Function(Duration)? delay,

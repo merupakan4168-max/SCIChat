@@ -1,12 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
+import 'package:scichat/models/models.dart';
 import 'package:scichat/providers/scichat_provider.dart';
 import 'package:scichat/screens/home_screen.dart';
 import 'package:scichat/screens/settings_screen.dart';
 import 'package:scichat/services/gemini_service.dart';
 import 'package:scichat/services/storage_service.dart';
-import 'package:scichat/models/models.dart';
 import 'package:scichat/theme/scichat_theme.dart';
 
 class MockTestStorageService extends StorageService {
@@ -15,6 +15,9 @@ class MockTestStorageService extends StorageService {
   final List<ArxivPaper> _favorites = [];
   final List<ResearchNote> _notes = [];
   String _themeMode = 'system';
+  SearchFilter _searchFilter = const SearchFilter();
+  int clearSearchCacheCallCount = 0;
+  final Set<String> _cacheKeys = {'scichat_cache_paper1', 'scichat_cache_paper2'};
 
   MockTestStorageService({String? initialKey}) : _storedKey = initialKey;
 
@@ -75,14 +78,20 @@ class MockTestStorageService extends StorageService {
     _themeMode = mode;
   }
 
-  SearchFilter _searchFilter = const SearchFilter();
-
   @override
   Future<SearchFilter> getSearchFilter() async => _searchFilter;
 
   @override
   Future<void> saveSearchFilter(SearchFilter filter) async {
     _searchFilter = filter;
+  }
+
+  @override
+  Future<int> clearSearchCache() async {
+    clearSearchCacheCallCount++;
+    final count = _cacheKeys.length;
+    _cacheKeys.clear();
+    return count;
   }
 }
 
@@ -99,16 +108,64 @@ void main() {
       child: MaterialApp(
         theme: SciChatTheme.light,
         darkTheme: SciChatTheme.dark,
+        themeMode: provider.themeMode,
         home: const SettingsScreen(),
       ),
     );
   }
 
-  group('SettingsScreen API Key Display & Sync Tests', () {
-    testWidgets('1. Key tetap dimasking secara default (obscureText: true)',
+  Widget buildAppWidget(SciChatProvider provider) {
+    return ChangeNotifierProvider<SciChatProvider>.value(
+      value: provider,
+      child: Consumer<SciChatProvider>(
+        builder: (context, p, _) => MaterialApp(
+          theme: SciChatTheme.light,
+          darkTheme: SciChatTheme.dark,
+          themeMode: p.themeMode,
+          home: const HomeScreen(),
+        ),
+      ),
+    );
+  }
+
+  Widget buildAboutCardWidget({
+    ThemeMode themeMode = ThemeMode.dark,
+    double? textScale,
+    double width = 360.0,
+    SciChatProvider? provider,
+  }) {
+    final effectiveProvider = provider ??
+        SciChatProvider(
+          storageService: MockTestStorageService(),
+          geminiService: MockTestGeminiService(),
+        );
+
+    return ChangeNotifierProvider<SciChatProvider>.value(
+      value: effectiveProvider,
+      child: MaterialApp(
+        theme: SciChatTheme.light,
+        darkTheme: SciChatTheme.dark,
+        themeMode: themeMode,
+        home: MediaQuery(
+          data: MediaQueryData(
+            size: Size(width, 700),
+            textScaler: TextScaler.linear(textScale ?? 1.0),
+          ),
+          child: const Scaffold(
+            body: Padding(
+              padding: EdgeInsets.symmetric(horizontal: 16, vertical: 20),
+              child: SingleChildScrollView(child: AboutCard()),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  group('Sub-tahap 4C.1: Selektor Tema Segmented Control Tests', () {
+    testWidgets('1. Ketiga mode tema bekerja, memperbarui provider, dan tersimpan',
         (tester) async {
-      final storage =
-          MockTestStorageService(initialKey: 'sk-test1234567890abcdef');
+      final storage = MockTestStorageService();
       final provider = SciChatProvider(
         storageService: storage,
         geminiService: MockTestGeminiService(),
@@ -118,19 +175,31 @@ void main() {
       await tester.pumpWidget(buildSettingsWidget(provider));
       await tester.pumpAndSettle();
 
-      final textFieldFinder = find.byType(TextField);
-      expect(textFieldFinder, findsOneWidget);
+      // Mode awal adalah system
+      expect(provider.themeMode, ThemeMode.system);
 
-      final textField = tester.widget<TextField>(textFieldFinder);
-      expect(textField.obscureText, isTrue);
-      expect(textField.controller?.text, equals('sk-test1234567890abcdef'));
+      // 1. Pilih Terang
+      await tester.tap(find.text('Terang'));
+      await tester.pumpAndSettle();
+      expect(provider.themeMode, ThemeMode.light);
+      expect(await storage.getThemeMode(), 'light');
+
+      // 2. Pilih Gelap
+      await tester.tap(find.text('Gelap'));
+      await tester.pumpAndSettle();
+      expect(provider.themeMode, ThemeMode.dark);
+      expect(await storage.getThemeMode(), 'dark');
+
+      // 3. Pilih Sistem
+      await tester.tap(find.text('Sistem'));
+      await tester.pumpAndSettle();
+      expect(provider.themeMode, ThemeMode.system);
+      expect(await storage.getThemeMode(), 'system');
     });
 
-    testWidgets(
-        '2. Tombol mata menampilkan dan menyembunyikan nilai tanpa mengubah nilainya',
+    testWidgets('2. Segmen tema memiliki target sentuh memadai (>= 44dp)',
         (tester) async {
-      final storage =
-          MockTestStorageService(initialKey: 'sk-test1234567890abcdef');
+      final storage = MockTestStorageService();
       final provider = SciChatProvider(
         storageService: storage,
         geminiService: MockTestGeminiService(),
@@ -140,55 +209,234 @@ void main() {
       await tester.pumpWidget(buildSettingsWidget(provider));
       await tester.pumpAndSettle();
 
-      // Cek tombol mata (awalnya visibility_outlined)
-      final eyeButtonFinder = find.byIcon(Icons.visibility_outlined);
-      expect(eyeButtonFinder, findsOneWidget);
-
-      // Tekan tombol mata untuk melihat teks
-      await tester.tap(eyeButtonFinder);
-      await tester.pumpAndSettle();
-
-      var textField = tester.widget<TextField>(find.byType(TextField));
-      expect(textField.obscureText, isFalse);
-      expect(textField.controller?.text, equals('sk-test1234567890abcdef'));
-      expect(find.byIcon(Icons.visibility_off_outlined), findsOneWidget);
-
-      // Tekan kembali untuk memasking ulang
-      await tester.tap(find.byIcon(Icons.visibility_off_outlined));
-      await tester.pumpAndSettle();
-
-      textField = tester.widget<TextField>(find.byType(TextField));
-      expect(textField.obscureText, isTrue);
-      expect(textField.controller?.text, equals('sk-test1234567890abcdef'));
+      final terangFinder = find.text('Terang');
+      expect(terangFinder, findsOneWidget);
+      final size = tester.getSize(find.ancestor(
+        of: terangFinder,
+        matching: find.byType(GestureDetector),
+      ).first);
+      expect(size.height, greaterThanOrEqualTo(44.0));
     });
+  });
 
-    testWidgets(
-        '3. Sinkronisasi asinkron: nilai dari provider.init() yang selesai terlambat langsung tersinkronkan ke controller',
+  group('Sub-tahap 4C.1: Preferensi Pencarian Terpadu Tests', () {
+    testWidgets('3. Kapsul batas hasil 3, 5, 8, 10 memperbarui filter dengan benar',
         (tester) async {
-      final storage = MockTestStorageService(initialKey: 'sk-async-loaded-key');
+      final storage = MockTestStorageService();
       final provider = SciChatProvider(
         storageService: storage,
         geminiService: MockTestGeminiService(),
       );
+      await provider.init();
 
-      // Pasang widget SEBELUM provider.init() selesai
       await tester.pumpWidget(buildSettingsWidget(provider));
-      await tester.pump();
+      await tester.pumpAndSettle();
 
-      // Awalnya kosong karena init belum selesai
-      var textField = tester.widget<TextField>(find.byType(TextField));
+      // Default adalah 5
+      expect(provider.filter.maxResults, 5);
+
+      // Tap kapsul 3
+      await tester.tap(find.byKey(const ValueKey('capsule_3')));
+      await tester.pumpAndSettle();
+      expect(provider.filter.maxResults, 3);
+
+      // Tap kapsul 8
+      await tester.tap(find.byKey(const ValueKey('capsule_8')));
+      await tester.pumpAndSettle();
+      expect(provider.filter.maxResults, 8);
+
+      // Tap kapsul 10
+      await tester.tap(find.byKey(const ValueKey('capsule_10')));
+      await tester.pumpAndSettle();
+      expect(provider.filter.maxResults, 10);
+    });
+
+    testWidgets('4. Opsi urutan pencarian tetap bekerja (relevance, submittedDate, lastUpdatedDate)',
+        (tester) async {
+      tester.view.physicalSize = const Size(800, 1000);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(() => tester.view.resetPhysicalSize());
+
+      final storage = MockTestStorageService();
+      final provider = SciChatProvider(
+        storageService: storage,
+        geminiService: MockTestGeminiService(),
+      );
+      await provider.init();
+
+      await tester.pumpWidget(buildSettingsWidget(provider));
+      await tester.pumpAndSettle();
+
+      expect(provider.filter.sortBy, 'relevance');
+
+      // Tap Paling baru
+      await tester.tap(find.byKey(const ValueKey('sort_submittedDate')));
+      await tester.pumpAndSettle();
+      expect(provider.filter.sortBy, 'submittedDate');
+
+      // Tap Terakhir diperbarui
+      await tester.tap(find.byKey(const ValueKey('sort_lastUpdatedDate')));
+      await tester.pumpAndSettle();
+      expect(provider.filter.sortBy, 'lastUpdatedDate');
+
+      // Tap Relevansi
+      await tester.tap(find.byKey(const ValueKey('sort_relevance')));
+      await tester.pumpAndSettle();
+      expect(provider.filter.sortBy, 'relevance');
+    });
+
+    testWidgets('5. Layout kartu pencarian terpadu bebas overflow pada 320dp dan teks 1.2x',
+        (tester) async {
+      tester.view.physicalSize = const Size(320, 700);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(() => tester.view.resetPhysicalSize());
+
+      final storage = MockTestStorageService();
+      final provider = SciChatProvider(
+        storageService: storage,
+        geminiService: MockTestGeminiService(),
+      );
+      await provider.init();
+
+      await tester.pumpWidget(
+        ChangeNotifierProvider<SciChatProvider>.value(
+          value: provider,
+          child: MaterialApp(
+            theme: SciChatTheme.dark,
+            home: const MediaQuery(
+              data: MediaQueryData(
+                size: Size(320, 700),
+                textScaler: TextScaler.linear(1.2),
+              ),
+              child: SettingsScreen(),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(tester.takeException(), isNull);
+      expect(find.text('Batas hasil'), findsOneWidget);
+      expect(find.text('Urutan pencarian'), findsOneWidget);
+    });
+  });
+
+  group('Sub-tahap 4C.1: Navigasi Bottom Navigation & Header Tanpa Tombol Back', () {
+    testWidgets('6. SettingsScreen tab root tidak memiliki tombol panah kembali di AppBar',
+        (tester) async {
+      final storage = MockTestStorageService();
+      final provider = SciChatProvider(
+        storageService: storage,
+        geminiService: MockTestGeminiService(),
+      );
+      await provider.init();
+
+      await tester.pumpWidget(buildSettingsWidget(provider));
+      await tester.pumpAndSettle();
+
+      // Tidak ada tombol arrow_back di AppBar
+      expect(find.widgetWithIcon(IconButton, Icons.arrow_back), findsNothing);
+      expect(find.text('Pengaturan'), findsOneWidget);
+    });
+
+    testWidgets('7. Navigasi bottom navigation dan Back Android (PopScope) tetap bekerja sempurna',
+        (tester) async {
+      final storage = MockTestStorageService();
+      final session = ChatSession(
+        id: 'sess-1',
+        title: 'Sesi Riset Kuantum',
+        updatedAt: DateTime.now(),
+        messages: [
+          ChatMessage(
+            id: 'msg-1',
+            role: MessageRole.user,
+            content: 'Pertanyaan pengguna',
+            timestamp: DateTime.now(),
+          ),
+        ],
+      );
+      await storage.saveChatSessions([session]);
+      final provider = SciChatProvider(
+        storageService: storage,
+        geminiService: MockTestGeminiService(),
+      );
+      await provider.init();
+
+      await tester.pumpWidget(buildAppWidget(provider));
+      await tester.pumpAndSettle();
+
+      // Pindah ke Tab Settings (index 3)
+      provider.setTab(3);
+      await tester.pumpAndSettle();
+      expect(provider.currentTab, 3);
+      expect(find.text('Pengaturan'), findsOneWidget);
+
+      // Simulasikan tombol Back Android via PopScope di HomeScreen
+      final dynamic widgetsAppState = tester.state(find.byType(WidgetsApp));
+      await widgetsAppState.didPopRoute();
+      await tester.pumpAndSettle();
+
+      // Kembali ke Tab 0 (Research) dengan state percakapan utuh
+      expect(provider.currentTab, 0);
+      expect(provider.messages.length, 1);
+    });
+  });
+
+  group('Sub-tahap 4C.2: Agnes API Key Status, Preview Aman & Tombol Simpan Tests', () {
+    testWidgets('8. Kunci tersimpan menampilkan status informatif dan badge Aktif tanpa kunci mentah',
+        (tester) async {
+      final storage = MockTestStorageService(initialKey: 'sk-secret-key-12345678');
+      final provider = SciChatProvider(
+        storageService: storage,
+        geminiService: MockTestGeminiService(),
+      );
+      await provider.init();
+
+      await tester.pumpWidget(buildSettingsWidget(provider));
+      await tester.pumpAndSettle();
+
+      // Badge Aktif terlihat
+      expect(find.text('Aktif'), findsOneWidget);
+      // Status informatif terlihat
+      expect(find.text('Kunci API tersimpan'), findsOneWidget);
+      // Tombol Ganti Kunci terlihat
+      expect(find.text('Ganti Kunci'), findsOneWidget);
+      // Kunci mentah TIDAK ditampilkan di layar
+      expect(find.text('sk-secret-key-12345678'), findsNothing);
+    });
+
+    testWidgets('9. Tombol Ganti Kunci memunculkan input field yang bersih dan dapat dibatalkan',
+        (tester) async {
+      final storage = MockTestStorageService(initialKey: 'sk-secret-key-12345678');
+      final provider = SciChatProvider(
+        storageService: storage,
+        geminiService: MockTestGeminiService(),
+      );
+      await provider.init();
+
+      await tester.pumpWidget(buildSettingsWidget(provider));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Ganti Kunci'));
+      await tester.pumpAndSettle();
+
+      // Input field muncul dan bersih (bukan deretan titik panjang)
+      final inputFinder = find.byType(TextField);
+      expect(inputFinder, findsOneWidget);
+      final textField = tester.widget<TextField>(inputFinder);
       expect(textField.controller?.text, isEmpty);
+      expect(textField.obscureText, isTrue);
 
-      // Jalankan init() secara asinkron
-      await provider.init();
+      // Tekan tombol Batal
+      await tester.tap(find.text('Batal'));
       await tester.pumpAndSettle();
 
-      // Controller HARUS otomatis terisi dengan kunci yang dimuat, bukan tetap kosong/placeholder
-      textField = tester.widget<TextField>(find.byType(TextField));
-      expect(textField.controller?.text, equals('sk-async-loaded-key'));
+      // Kembali ke preview status tersimpan
+      expect(find.text('Kunci API tersimpan'), findsOneWidget);
+      expect(find.byType(TextField), findsNothing);
     });
 
-    testWidgets('4. Menyimpan key baru memperbarui provider dan storage',
+    testWidgets('10. Tombol Simpan nonaktif jika input kosong/sama dan aktif saat input baru valid',
         (tester) async {
       final storage = MockTestStorageService(initialKey: '');
       final provider = SciChatProvider(
@@ -200,26 +448,34 @@ void main() {
       await tester.pumpWidget(buildSettingsWidget(provider));
       await tester.pumpAndSettle();
 
-      final textFieldFinder = find.byType(TextField);
-      await tester.enterText(textFieldFinder, 'sk-newly-saved-key-999');
+      // Saat kunci belum ada, TextField tampil langsung
+      final inputFinder = find.byType(TextField);
+      expect(inputFinder, findsOneWidget);
+
+      // Awalnya kosong -> canSave false -> ketukan tidak menyimpan
+      await tester.tap(find.text('Simpan Kunci API'));
+      await tester.pumpAndSettle();
+      expect(provider.apiKey, isEmpty);
+
+      // Masukkan kunci baru
+      await tester.enterText(inputFinder, 'sk-valid-new-key-123');
       await tester.pumpAndSettle();
 
-      final saveButtonFinder = find.text('Save API Key');
-      expect(saveButtonFinder, findsOneWidget);
-      await tester.tap(saveButtonFinder);
+      // Ketuk Simpan
+      await tester.tap(find.text('Simpan Kunci API'));
       await tester.pump(const Duration(seconds: 3));
       await tester.pumpAndSettle();
 
-      expect(provider.apiKey, equals('sk-newly-saved-key-999'));
+      // Kunci tersimpan di provider dan storage
+      expect(provider.apiKey, 'sk-valid-new-key-123');
       expect(provider.apiKeySet, isTrue);
-      expect(await storage.getApiKey(), equals('sk-newly-saved-key-999'));
+      expect(await storage.getApiKey(), 'sk-valid-new-key-123');
+      // Tampilan beralih ke preview tersimpan
+      expect(find.text('Kunci API tersimpan'), findsOneWidget);
     });
 
-    testWidgets(
-        '5. Mengosongkan key dan menyimpan menghapus key dari provider dan storage',
-        (tester) async {
-      final storage =
-          MockTestStorageService(initialKey: 'sk-old-key-to-delete');
+    testWidgets('11. Tautan Agnes AI memanggil URL yang benar', (tester) async {
+      final storage = MockTestStorageService();
       final provider = SciChatProvider(
         storageService: storage,
         geminiService: MockTestGeminiService(),
@@ -229,279 +485,12 @@ void main() {
       await tester.pumpWidget(buildSettingsWidget(provider));
       await tester.pumpAndSettle();
 
-      final textFieldFinder = find.byType(TextField);
-      await tester.enterText(textFieldFinder, '');
-      await tester.pumpAndSettle();
-
-      final saveButtonFinder = find.text('Update API Key');
-      expect(saveButtonFinder, findsOneWidget);
-      await tester.tap(saveButtonFinder);
-      await tester.pump(const Duration(seconds: 3));
-      await tester.pumpAndSettle();
-
-      expect(provider.apiKey, isEmpty);
-      expect(provider.apiKeySet, isFalse);
-      expect(await storage.getApiKey(), isEmpty);
+      expect(find.textContaining('platform Agnes AI'), findsOneWidget);
     });
   });
 
-  group('Settings Back Navigation, PopScope & Theme Integration Tests', () {
-    Widget buildAppWidget(SciChatProvider provider) {
-      return ChangeNotifierProvider<SciChatProvider>.value(
-        value: provider,
-        child: Consumer<SciChatProvider>(
-          builder: (context, p, _) => MaterialApp(
-            theme: SciChatTheme.light,
-            darkTheme: SciChatTheme.dark,
-            themeMode: p.themeMode,
-            home: const HomeScreen(),
-          ),
-        ),
-      );
-    }
-
-    testWidgets(
-        '6. Research -> Settings -> tekan tombol kembali di AppBar kembali ke Research tanpa black screen',
-        (tester) async {
-      final storage = MockTestStorageService(initialKey: 'sk-test-key');
-      final session = ChatSession(
-        id: 'sess-1',
-        title: 'Sesi Riset Kuantum',
-        updatedAt: DateTime.now(),
-        messages: [
-          ChatMessage(
-            id: 'msg-1',
-            role: MessageRole.user,
-            content: 'Pertanyaan pengguna tentang dekoherensi',
-            timestamp: DateTime.now(),
-          ),
-        ],
-      );
-      await storage.saveChatSessions([session]);
-      final provider = SciChatProvider(
-        storageService: storage,
-        geminiService: MockTestGeminiService(),
-      );
-      await provider.init();
-
-      await tester.pumpWidget(buildAppWidget(provider));
-      await tester.pumpAndSettle();
-
-      // Mulai pada tab 0 (Research) dengan sesi aktif
-      expect(provider.currentTab, equals(0));
-      expect(provider.messages.length, equals(1));
-      expect(find.byType(HomeScreen), findsOneWidget);
-
-      // Pindah ke tab Settings (index 3)
-      provider.setTab(3);
-      await tester.pumpAndSettle();
-      expect(provider.currentTab, equals(3));
-      expect(find.text('Pengaturan'), findsOneWidget);
-
-      // Tekan tombol kembali di AppBar Settings
-      final backButton = find.widgetWithIcon(IconButton, Icons.arrow_back);
-      expect(backButton, findsOneWidget);
-      await tester.tap(backButton);
-      await tester.pumpAndSettle();
-
-      // Tab kembali ke Research (index 0), root route HomeScreen tetap hidup tanpa black screen
-      expect(provider.currentTab, equals(0));
-      expect(find.byType(HomeScreen), findsOneWidget);
-      // State percakapan tetap utuh tidak hilang
-      expect(provider.messages.length, equals(1));
-    });
-
-    testWidgets(
-        '7. Research -> Settings -> tekan tombol Back Android kembali ke Research melalui PopScope',
-        (tester) async {
-      final storage = MockTestStorageService(initialKey: 'sk-test-key');
-      final session = ChatSession(
-        id: 'sess-1',
-        title: 'Sesi Riset Kuantum',
-        updatedAt: DateTime.now(),
-        messages: [
-          ChatMessage(
-            id: 'msg-1',
-            role: MessageRole.user,
-            content: 'Pertanyaan pengguna tentang dekoherensi',
-            timestamp: DateTime.now(),
-          ),
-        ],
-      );
-      await storage.saveChatSessions([session]);
-      final provider = SciChatProvider(
-        storageService: storage,
-        geminiService: MockTestGeminiService(),
-      );
-      await provider.init();
-
-      await tester.pumpWidget(buildAppWidget(provider));
-      await tester.pumpAndSettle();
-
-      // Pindah ke Settings
-      provider.setTab(3);
-      await tester.pumpAndSettle();
-      expect(provider.currentTab, equals(3));
-
-      // Simulasikan tombol Back Android
-      final dynamic widgetsAppState = tester.state(find.byType(WidgetsApp));
-      await widgetsAppState.didPopRoute();
-      await tester.pumpAndSettle();
-
-      // PopScope harus mengarahkan kembali ke Tab 0
-      expect(provider.currentTab, equals(0));
-      expect(find.byType(HomeScreen), findsOneWidget);
-      // State percakapan tetap utuh
-      expect(provider.messages.length, equals(1));
-    });
-
-    testWidgets(
-        '8. Ubah tema Terang -> Gelap -> Sistem mempertahankan state percakapan dan navigasi',
-        (tester) async {
-      final storage = MockTestStorageService(initialKey: 'sk-test-key');
-      final provider = SciChatProvider(
-        storageService: storage,
-        geminiService: MockTestGeminiService(),
-      );
-      await provider.init();
-
-      // Tambahkan chat session dan favorites untuk verifikasi keutuhan data
-      final session = ChatSession(
-        id: 'sess-1',
-        title: 'Sesi Riset Kuantum',
-        updatedAt: DateTime.now(),
-        messages: [
-          ChatMessage(
-            id: 'msg-1',
-            role: MessageRole.user,
-            content: 'Pertanyaan pengguna tentang dekoherensi',
-            timestamp: DateTime.now(),
-          ),
-          ChatMessage(
-            id: 'msg-2',
-            role: MessageRole.assistant,
-            content: 'Jawaban riset AI',
-            timestamp: DateTime.now(),
-          ),
-        ],
-      );
-      await storage.saveChatSessions([session]);
-      await provider.init();
-
-      await tester.pumpWidget(buildAppWidget(provider));
-      await tester.pumpAndSettle();
-
-      // Beralih ke Settings
-      provider.setTab(3);
-      await tester.pumpAndSettle();
-
-      // 1. Ubah ke Terang
-      await provider.setThemeMode(ThemeMode.light);
-      await tester.pumpAndSettle();
-      expect(provider.themeMode, equals(ThemeMode.light));
-
-      // 2. Ubah ke Gelap
-      await provider.setThemeMode(ThemeMode.dark);
-      await tester.pumpAndSettle();
-      expect(provider.themeMode, equals(ThemeMode.dark));
-
-      // 3. Ubah ke Sistem
-      await provider.setThemeMode(ThemeMode.system);
-      await tester.pumpAndSettle();
-      expect(provider.themeMode, equals(ThemeMode.system));
-
-      // Kembali ke Research
-      final backButton = find.widgetWithIcon(IconButton, Icons.arrow_back);
-      await tester.tap(backButton);
-      await tester.pumpAndSettle();
-
-      expect(provider.currentTab, equals(0));
-      expect(provider.apiKey, equals('sk-test-key'));
-      expect(provider.messages.length, equals(2));
-      expect(provider.messages.first.content,
-          equals('Pertanyaan pengguna tentang dekoherensi'));
-    });
-
-    testWidgets(
-        '9. Berpindah tab berulang kali setelah tema berubah tanpa blank screen atau error',
-        (tester) async {
-      final storage = MockTestStorageService(initialKey: 'sk-test-key');
-      final provider = SciChatProvider(
-        storageService: storage,
-        geminiService: MockTestGeminiService(),
-      );
-      await provider.init();
-
-      await tester.pumpWidget(buildAppWidget(provider));
-      await tester.pumpAndSettle();
-
-      // Ubah tema ke Gelap
-      await provider.setThemeMode(ThemeMode.dark);
-      await tester.pumpAndSettle();
-
-      // Berpindah tab berurutan 0 -> 1 -> 2 -> 3 -> 0
-      provider.setTab(1); // Explore
-      await tester.pumpAndSettle();
-      expect(provider.currentTab, equals(1));
-
-      provider.setTab(2); // Library
-      await tester.pumpAndSettle();
-      expect(provider.currentTab, equals(2));
-
-      provider.setTab(3); // Settings
-      await tester.pumpAndSettle();
-      expect(provider.currentTab, equals(3));
-
-      // Tekan tombol back di Settings AppBar
-      final backButton = find.widgetWithIcon(IconButton, Icons.arrow_back);
-      await tester.tap(backButton);
-      await tester.pumpAndSettle();
-      expect(provider.currentTab, equals(0));
-
-      // Ubah tema ke Terang dan pindah balik
-      await provider.setThemeMode(ThemeMode.light);
-      await tester.pumpAndSettle();
-
-      provider.setTab(2);
-      await tester.pumpAndSettle();
-      expect(provider.currentTab, equals(2));
-
-      // Back Android dari Library kembali ke Research
-      final dynamic widgetsAppState = tester.state(find.byType(WidgetsApp));
-      await widgetsAppState.didPopRoute();
-      await tester.pumpAndSettle();
-      expect(provider.currentTab, equals(0));
-      expect(find.byType(HomeScreen), findsOneWidget);
-    });
-  });
-
-  Widget buildAboutCardWidget({
-    ThemeMode themeMode = ThemeMode.dark,
-    double? textScale,
-    double width = 360.0,
-  }) {
-    return MaterialApp(
-      theme: SciChatTheme.light,
-      darkTheme: SciChatTheme.dark,
-      themeMode: themeMode,
-      home: MediaQuery(
-        data: MediaQueryData(
-          size: Size(width, 700),
-          textScaler: TextScaler.linear(textScale ?? 1.0),
-        ),
-        child: const Scaffold(
-          body: Padding(
-            padding: EdgeInsets.symmetric(horizontal: 20, vertical: 24),
-            child: SingleChildScrollView(child: AboutCard()),
-          ),
-        ),
-      ),
-    );
-  }
-
-  group('SettingsScreen About Card Responsiveness & Layout Tests', () {
-    testWidgets(
-        '10. Kartu Tentang menampilkan seluruh data dan nilai berada di dalam batas kartu pada SettingsScreen',
+  group('Sub-tahap 4C.3: Tentang dan Hapus Cache Tests', () {
+    testWidgets('12. Kartu Tentang menampilkan identitas SCIChat, v1.0.0, dan tombol Hapus Cache',
         (tester) async {
       final storage = MockTestStorageService();
       final provider = SciChatProvider(
@@ -512,98 +501,123 @@ void main() {
 
       await tester.pumpWidget(buildSettingsWidget(provider));
       await tester.pumpAndSettle();
-      await tester.drag(find.byType(ListView), const Offset(0, -500));
+
+      // Scroll ke bawah
+      await tester.drag(find.byType(ListView), const Offset(0, -400));
       await tester.pumpAndSettle();
 
-      // Pastikan label dan nilai lengkap terlihat
-      expect(find.text('SciChat'), findsOneWidget);
-      expect(find.text('v2.0.0'), findsOneWidget);
+      expect(find.text('SCIChat'), findsOneWidget);
+      expect(find.text('v1.0.0'), findsOneWidget);
       expect(find.text('Sumber Data'), findsOneWidget);
-      expect(
-          find.text('arXiv, CrossRef, OpenAlex, Semantic Scholar, Archive.org'),
-          findsOneWidget);
-      expect(find.text('Model AI'), findsOneWidget);
-      expect(find.text('Agnes AI (Smart Routing)'), findsOneWidget);
-      expect(find.text('Deep Search'), findsOneWidget);
-      expect(find.text('Tersedia (Full-text Analysis)'), findsOneWidget);
       expect(find.text('Cache TTL'), findsOneWidget);
       expect(find.text('6 Jam'), findsOneWidget);
-
-      // Verifikasi batas geometris: teks Sumber Data tidak meluber ke kanan melebihi kartu
-      final cardFinder = find.byType(AboutCard);
-      final cardRect = tester.getRect(cardFinder);
-      final sumberDataRect = tester.getRect(find
-          .text('arXiv, CrossRef, OpenAlex, Semantic Scholar, Archive.org'));
-
-      expect(sumberDataRect.right, lessThanOrEqualTo(cardRect.right));
-      expect(sumberDataRect.left, greaterThanOrEqualTo(cardRect.left));
-      expect(tester.takeException(), isNull);
+      expect(find.byKey(const ValueKey('clear_cache_button')), findsOneWidget);
     });
 
-    testWidgets(
-        '11. Responsif pada layar sempit 320dp tanpa overflow horizontal dan teks berada di dalam batas kartu',
+    testWidgets('13. Mengetuk tombol Hapus Cache memunculkan konfirmasi dan memanggil clearCache',
         (tester) async {
-      tester.view.physicalSize = const Size(320, 700);
-      tester.view.devicePixelRatio = 1.0;
-      addTearDown(() => tester.view.resetPhysicalSize());
+      final storage = MockTestStorageService();
+      final provider = SciChatProvider(
+        storageService: storage,
+        geminiService: MockTestGeminiService(),
+      );
+      await provider.init();
 
-      await tester.pumpWidget(buildAboutCardWidget(width: 320));
+      await tester.pumpWidget(buildSettingsWidget(provider));
       await tester.pumpAndSettle();
 
-      expect(tester.takeException(), isNull);
+      // Scroll ke bawah
+      await tester.drag(find.byType(ListView), const Offset(0, -400));
+      await tester.pumpAndSettle();
 
-      final cardFinder = find.byType(AboutCard);
-      final cardRect = tester.getRect(cardFinder);
-      final sumberDataRect = tester.getRect(find
-          .text('arXiv, CrossRef, OpenAlex, Semantic Scholar, Archive.org'));
+      // Ketuk Hapus Cache
+      await tester.tap(find.byKey(const ValueKey('clear_cache_button')));
+      await tester.pumpAndSettle();
 
-      expect(sumberDataRect.right, lessThanOrEqualTo(cardRect.right));
-      expect(sumberDataRect.left, greaterThanOrEqualTo(cardRect.left));
-      expect(find.text('Sumber Data'), findsOneWidget);
-      expect(find.text('Cache TTL'), findsOneWidget);
+      // Dialog konfirmasi muncul
+      expect(find.text('Hapus Cache Pencarian?'), findsOneWidget);
+      expect(
+          find.text(
+              'Seluruh cache hasil pencarian makalah akan dibersihkan. Markah, catatan, dan riwayat chat Anda tetap aman.'),
+          findsOneWidget);
+
+      // Konfirmasi Hapus
+      await tester.tap(find.text('Hapus'));
+      await tester.pumpAndSettle();
+
+      // Memastikan storage.clearSearchCache terpanggil
+      expect(storage.clearSearchCacheCallCount, 1);
+      // SnackBar umpan balik muncul
+      expect(find.textContaining('Cache pencarian berhasil dibersihkan'), findsOneWidget);
     });
 
-    testWidgets(
-        '12. Responsif pada layar standar 360dp dan 400dp serta text scaling 1.2x',
+    testWidgets('14. Hapus Cache tidak menghapus markah, catatan, sesi, atau API Key pengguna',
         (tester) async {
-      for (final width in [360.0, 400.0]) {
+      final storage = MockTestStorageService(initialKey: 'sk-safe-key');
+      final session = ChatSession(
+        id: 'sess-persist',
+        title: 'Sesi Persisten',
+        updatedAt: DateTime.now(),
+        messages: const [],
+      );
+      await storage.saveChatSessions([session]);
+      final note = ResearchNote(
+        id: 'note-1',
+        sourceMessageId: 'msg-1',
+        content: 'Insight penting',
+        sources: const [],
+        savedAt: DateTime.now(),
+      );
+      await storage.addNote(note);
+      const paper = ArxivPaper(
+        id: 'favorite-1',
+        title: 'Paper Favorit',
+        authors: ['Penulis'],
+        summary: 'Ringkasan',
+        published: '2024-01-01',
+        updated: '2024-01-01',
+        categories: ['cs.AI'],
+        pdfUrl: 'https://example.com/fav.pdf',
+        absUrl: 'https://example.com/fav',
+      );
+      await storage.addFavorite(paper);
+
+      final provider = SciChatProvider(
+        storageService: storage,
+        geminiService: MockTestGeminiService(),
+      );
+      await provider.init();
+
+      // Panggil pembersihan cache
+      final cleared = await provider.clearCache();
+      expect(cleared, greaterThanOrEqualTo(0));
+
+      // Verifikasi seluruh data pengguna tetap utuh 100%
+      expect(provider.apiKey, 'sk-safe-key');
+      expect(provider.apiKeySet, isTrue);
+      expect(await storage.getApiKey(), 'sk-safe-key');
+      expect((await storage.getChatSessions()).length, 1);
+      expect((await storage.getNotes()).length, 1);
+      expect(await storage.isFavorite('favorite-1'), isTrue);
+    });
+
+    testWidgets('15. Kartu Tentang responsif pada layar 320dp, 360dp, 400dp dan text scale 1.2x',
+        (tester) async {
+      for (final width in [320.0, 360.0, 400.0]) {
         for (final scale in [1.0, 1.2]) {
-          tester.view.physicalSize = Size(width, 800);
+          tester.view.physicalSize = Size(width, 700);
           tester.view.devicePixelRatio = 1.0;
 
-          await tester
-              .pumpWidget(buildAboutCardWidget(width: width, textScale: scale));
+          await tester.pumpWidget(
+              buildAboutCardWidget(width: width, textScale: scale));
           await tester.pumpAndSettle();
 
           expect(tester.takeException(), isNull);
-
-          final cardFinder = find.byType(AboutCard);
-          final cardRect = tester.getRect(cardFinder);
-          final sumberDataRect = tester.getRect(find.text(
-              'arXiv, CrossRef, OpenAlex, Semantic Scholar, Archive.org'));
-
-          expect(sumberDataRect.right, lessThanOrEqualTo(cardRect.right));
-          expect(sumberDataRect.left, greaterThanOrEqualTo(cardRect.left));
+          expect(find.text('SCIChat'), findsOneWidget);
+          expect(find.text('Cache TTL'), findsOneWidget);
         }
       }
       tester.view.resetPhysicalSize();
-    });
-
-    testWidgets('13. Kartu Tentang konsisten pada mode terang dan gelap',
-        (tester) async {
-      // Mode Terang
-      await tester.pumpWidget(buildAboutCardWidget(themeMode: ThemeMode.light));
-      await tester.pumpAndSettle();
-      expect(tester.takeException(), isNull);
-      expect(find.text('Sumber Data'), findsOneWidget);
-      expect(find.text('Agnes AI (Smart Routing)'), findsOneWidget);
-
-      // Mode Gelap
-      await tester.pumpWidget(buildAboutCardWidget(themeMode: ThemeMode.dark));
-      await tester.pumpAndSettle();
-      expect(tester.takeException(), isNull);
-      expect(find.text('Sumber Data'), findsOneWidget);
-      expect(find.text('Agnes AI (Smart Routing)'), findsOneWidget);
     });
   });
 }

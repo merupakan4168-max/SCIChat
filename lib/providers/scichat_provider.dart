@@ -992,6 +992,15 @@ class SciChatProvider extends ChangeNotifier {
     _storage.saveSearchFilter(f).catchError((_) {});
   }
 
+  /// Membersihkan cache pencarian dari SharedPreferences serta cache in-memory sementara.
+  /// Tidak pernah menghapus markah (favorites), catatan (notes), sesi chat, atau API key.
+  Future<int> clearCache() async {
+    _paperEvidenceCache.clear();
+    _paperTranslationCache.clear();
+    _search.clearMemoryCache();
+    return await _storage.clearSearchCache();
+  }
+
   // ── Notes ─────────────────────────────────────────────────────────────────
   Future<bool> saveInsight(ChatMessage message) async {
     if (isNoteSaved(message.id)) return false;
