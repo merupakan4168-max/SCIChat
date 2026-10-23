@@ -1142,6 +1142,7 @@ class _ActionButtons extends StatelessWidget {
               },
               child: Container(
                 height: 48,
+                padding: const EdgeInsets.symmetric(horizontal: 16),
                 alignment: Alignment.center,
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.center,
@@ -1154,16 +1155,20 @@ class _ActionButtons extends StatelessWidget {
                           : context.colors.textSecondary,
                     ),
                     const SizedBox(width: 8),
-                    Text(
-                      isSaved
-                          ? 'Tersimpan di Pustaka (Library)'
-                          : 'Simpan ke Pustaka (Library)',
-                      style: context.typography.labelMedium?.copyWith(
-                        color: isSaved
-                            ? context.colors.accent
-                            : context.colors.textPrimary,
-                        fontWeight: FontWeight.w600,
-                        fontSize: 14,
+                    Flexible(
+                      child: Text(
+                        isSaved
+                            ? 'Tersimpan di Pustaka (Library)'
+                            : 'Simpan ke Pustaka (Library)',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: context.typography.labelMedium?.copyWith(
+                          color: isSaved
+                              ? context.colors.accent
+                              : context.colors.textPrimary,
+                          fontWeight: FontWeight.w600,
+                          fontSize: 14,
+                        ),
                       ),
                     ),
                   ],

@@ -10,7 +10,6 @@ import 'package:scichat/services/pdf_service.dart';
 import 'package:scichat/services/search_service.dart';
 import 'package:scichat/services/storage_service.dart';
 import 'package:scichat/theme/scichat_theme.dart';
-import 'package:scichat/widgets/dynamic_source_button.dart';
 import 'package:scichat/widgets/paper_card.dart';
 import 'package:scichat/widgets/source_badge.dart';
 
@@ -23,7 +22,6 @@ class _FakeStorageService extends StorageService {
   Future<String?> getThemeMode() async => 'dark';
   @override
   Future<List<ArxivPaper>> getFavorites() async => _favorites;
-  @override
   Future<void> saveFavorites(List<ArxivPaper> papers) async {
     _favorites.clear();
     _favorites.addAll(papers);
@@ -360,9 +358,9 @@ void main() {
       ));
       await tester.pumpAndSettle();
 
-      // DynamicSourceButton should say Open Paper on OpenAlex, NOT Open PDF
-      expect(find.text('Open Paper on OpenAlex'), findsOneWidget);
-      expect(find.text('Open PDF'), findsNothing);
+      // DynamicSourceButton in PaperCard provides accessible tooltip & label Open Paper on OpenAlex
+      expect(find.byTooltip('Open Paper on OpenAlex'), findsOneWidget);
+      expect(find.byTooltip('Open PDF'), findsNothing);
       // Because pdfUrl is empty, Tanya Paper should not be shown; only Rangkum is available
       expect(find.text('Tanya Paper'), findsNothing);
       expect(find.text('Rangkum'), findsOneWidget);
@@ -435,8 +433,8 @@ void main() {
       await tester.pumpAndSettle();
       expect(chatPdf, isTrue);
 
-      // Tap Kutip to verify popup menu options
-      await tester.tap(find.text('Kutip'));
+      // Tap Kutip via accessible tooltip/semantics to verify popup menu options
+      await tester.tap(find.byTooltip('Kutip Makalah'));
       await tester.pumpAndSettle();
       expect(find.text('Salin BibTeX'), findsOneWidget);
       expect(find.text('Salin APA 7'), findsOneWidget);
@@ -658,9 +656,8 @@ void main() {
       await tester.pumpWidget(_wrapWithApp(const ChatScreen()));
       await tester.pump(const Duration(seconds: 6));
 
-      // Plus icon is simple Icons.add (not Icons.add_circle_outline)
-      expect(find.byIcon(Icons.add), findsOneWidget);
-      expect(find.byIcon(Icons.add_circle_outline), findsNothing);
+      // Tools menu icon is Icons.tune_rounded
+      expect(find.byIcon(Icons.tune_rounded), findsOneWidget);
 
       // Paperclip icon without visible text 'Lampirkan PDF'
       expect(find.byIcon(Icons.attach_file_rounded), findsOneWidget);
