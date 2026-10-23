@@ -105,6 +105,7 @@ class SciChatProvider extends ChangeNotifier {
   List<ChatMessage> _messages = [];
   List<ArxivPaper> _lastSearchResults = [];
   List<ArxivPaper> _favorites = [];
+
   /// Batas karakter teks hasil ekstraksi PDF untuk konteks percakapan Tanya Paper.
   /// Ditetapkan 48.000 karakter (~12-14 halaman paper ilmiah) agar mencakup
   /// seluruh seksi kunci: Abstrak, Metodologi, Arsitektur Model, Dataset,
@@ -136,6 +137,7 @@ class SciChatProvider extends ChangeNotifier {
   final Map<String, PaperEvidence> _paperEvidenceCache = {};
   final Map<String, Future<PaperEvidence>> _inflightEvidence = {};
   ArxivPaper? _pendingAttachment;
+  String? _pendingComposerPrompt;
   List<ResearchNote> _notes = [];
   SearchFilter _filter = const SearchFilter();
   int _currentTab = 0; // 0 = chat, 1 = favorites
@@ -183,6 +185,7 @@ class SciChatProvider extends ChangeNotifier {
     }
     return title;
   }
+
   List<ChatMessage> get messages => _messages;
   List<ArxivPaper> get lastSearchResults => _lastSearchResults;
   List<ArxivPaper> get favorites => _favorites;
@@ -207,6 +210,9 @@ class SciChatProvider extends ChangeNotifier {
 
   /// PDF chosen but not yet sent — shown as a chip in the composer.
   ArxivPaper? get pendingAttachment => _pendingAttachment;
+
+  /// Prompt text chosen from Prompt Library or external guide to be injected into composer.
+  String? get pendingComposerPrompt => _pendingComposerPrompt;
   SearchFilter get filter => _filter;
   int get currentTab => _currentTab;
   bool get isLoading =>
@@ -562,7 +568,14 @@ class SciChatProvider extends ChangeNotifier {
         trimmedQuery.contains('cara kerja') ||
         trimmedQuery.contains('sistem') ||
         trimmedQuery.contains('system')) {
-      targetSections.addAll(['methodology', 'methods', 'model architecture', 'approach', 'system model', 'proposed method']);
+      targetSections.addAll([
+        'methodology',
+        'methods',
+        'model architecture',
+        'approach',
+        'system model',
+        'proposed method'
+      ]);
     }
     if (trimmedQuery.contains('dataset') ||
         trimmedQuery.contains('data') ||
@@ -572,7 +585,8 @@ class SciChatProvider extends ChangeNotifier {
         trimmedQuery.contains('latih') ||
         trimmedQuery.contains('train') ||
         trimmedQuery.contains('setup')) {
-      targetSections.addAll(['experiments', 'experimental setup', 'methodology', 'dataset']);
+      targetSections.addAll(
+          ['experiments', 'experimental setup', 'methodology', 'dataset']);
     }
     if (trimmedQuery.contains('hasil') ||
         trimmedQuery.contains('result') ||
@@ -859,7 +873,8 @@ class SciChatProvider extends ChangeNotifier {
           final pNum = sc.pageNumber != PdfChunk.kUnknownPage
               ? ', Halaman: ${sc.pageNumber}'
               : '';
-          buffer.writeln('[Konteks Cadangan - Bagian: ${sc.sectionTitle}$pNum]');
+          buffer
+              .writeln('[Konteks Cadangan - Bagian: ${sc.sectionTitle}$pNum]');
           buffer.writeln(sc.text);
           buffer.writeln();
         }
@@ -899,7 +914,8 @@ class SciChatProvider extends ChangeNotifier {
         '- Jika evidence tidak memadai untuk menjawab secara substantif, nyatakan keterbatasan tersebut secara jujur.');
     buffer.writeln(
         '- Bedakan fakta dari tiap paper dan interpretasi lintas-paper secara eksplisit.');
-    buffer.writeln('- JANGAN mengklaim membaca bagian dokumen yang tidak tersedia.');
+    buffer.writeln(
+        '- JANGAN mengklaim membaca bagian dokumen yang tidak tersedia.');
     buffer.writeln(
         '- JANGAN menyimpulkan metode, hasil, angka, atau kontribusi yang tidak didukung oleh evidence (teks atau abstrak yang diberikan).');
     buffer.writeln(
@@ -958,7 +974,8 @@ class SciChatProvider extends ChangeNotifier {
         if (evidence.extractedText != null) {
           final clipped =
               evidence.extractedText!.length > kMultiPaperPerPaperMaxChars
-                  ? evidence.extractedText!.substring(0, kMultiPaperPerPaperMaxChars)
+                  ? evidence.extractedText!
+                      .substring(0, kMultiPaperPerPaperMaxChars)
                   : evidence.extractedText!;
           buffer.writeln('Isi Teks PDF (sebagian):\n$clipped');
         }
@@ -978,7 +995,9 @@ class SciChatProvider extends ChangeNotifier {
         buffer.writeln('Abstrak: ${p.summary.trim()}');
       } else {
         final relAbstract = findReliableAbstractChunk(chunks);
-        if (relAbstract != null && !retrieval.scoredChunks.any((sc) => sc.chunk.id == relAbstract.id)) {
+        if (relAbstract != null &&
+            !retrieval.scoredChunks
+                .any((sc) => sc.chunk.id == relAbstract.id)) {
           buffer.writeln('Abstrak (Ekstraksi PDF): ${relAbstract.text.trim()}');
         }
       }
@@ -1099,6 +1118,23 @@ class SciChatProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  void setComposerPrompt(String prompt) {
+    _pendingComposerPrompt = prompt;
+    notifyListeners();
+  }
+
+  /// Konsumsi nilai pending prompt satu kali agar tidak disuntikkan berulang pada rebuild berikutnya.
+  String? consumeComposerPrompt() {
+    final prompt = _pendingComposerPrompt;
+    _pendingComposerPrompt = null;
+    return prompt;
+  }
+
+  void clearComposerPrompt() {
+    _pendingComposerPrompt = null;
+    notifyListeners();
+  }
+
   void toggleSelectionMode() {
     _isSelectionMode = !_isSelectionMode;
     if (!_isSelectionMode) {
@@ -1178,7 +1214,8 @@ class SciChatProvider extends ChangeNotifier {
 
   /// Memuat literatur riset untuk topik tertentu di halaman Jelajah Riset.
   /// Dilengkapi pengaman urutan kueri (_exploreRequestId) untuk mencegah race condition.
-  Future<void> loadExploreTopic(String topicId, {SearchService? customSearch}) async {
+  Future<void> loadExploreTopic(String topicId,
+      {SearchService? customSearch}) async {
     final topic = kDefaultExploreTopics.firstWhere(
       (t) => t.id == topicId,
       orElse: () => kDefaultExploreTopics.first,
@@ -1214,7 +1251,8 @@ class SciChatProvider extends ChangeNotifier {
   }
 
   /// Menjalankan pencarian teks bebas di halaman Jelajah Riset.
-  Future<void> searchExplore(String query, {SearchService? customSearch}) async {
+  Future<void> searchExplore(String query,
+      {SearchService? customSearch}) async {
     final q = query.trim();
     if (q.isEmpty) return;
 
@@ -1249,7 +1287,8 @@ class SciChatProvider extends ChangeNotifier {
   /// Memuat ulang halaman Jelajah Riset (untuk Pull-to-Refresh atau tombol Retry).
   Future<void> refreshExplore({SearchService? customSearch}) async {
     if (_selectedExploreTopicId.isNotEmpty) {
-      await loadExploreTopic(_selectedExploreTopicId, customSearch: customSearch);
+      await loadExploreTopic(_selectedExploreTopicId,
+          customSearch: customSearch);
     } else if (_exploreSearchQuery.isNotEmpty) {
       await searchExplore(_exploreSearchQuery, customSearch: customSearch);
     } else {
@@ -1395,9 +1434,8 @@ class SciChatProvider extends ChangeNotifier {
   bool isPaperSummarySaved(String paperId) {
     final cleanId = paperId.trim();
     if (cleanId.isEmpty) return false;
-    return _notes.any((n) =>
-        n.isPaperSummary &&
-        n.sources.any((p) => p.id == cleanId));
+    return _notes
+        .any((n) => n.isPaperSummary && n.sources.any((p) => p.id == cleanId));
   }
 
   /// Membentuk judul ringkas dan bersih dari pesan pertama (maksimal 100 karakter).
@@ -1439,8 +1477,8 @@ class SciChatProvider extends ChangeNotifier {
       final originId =
           _activeSessionId.isNotEmpty ? _activeSessionId : _uuid.v4();
       _activeSessionId = originId;
-      final firstUserMsg = _messages.firstWhere((m) => m.isUser,
-          orElse: () => _messages.first);
+      final firstUserMsg =
+          _messages.firstWhere((m) => m.isUser, orElse: () => _messages.first);
       final title = _generateTitleFromFirstMessage(firstUserMsg.content);
       _sessions.insert(
         0,
@@ -2156,12 +2194,10 @@ class SciChatProvider extends ChangeNotifier {
           content: parseResult.cleanContent,
           status: MessageStatus.done,
           papers: papers,
-          validatedCitationPages: validatedCitationPages.isNotEmpty
-              ? validatedCitationPages
-              : null,
-          validatedSectionPages: validatedSectionPages.isNotEmpty
-              ? validatedSectionPages
-              : null,
+          validatedCitationPages:
+              validatedCitationPages.isNotEmpty ? validatedCitationPages : null,
+          validatedSectionPages:
+              validatedSectionPages.isNotEmpty ? validatedSectionPages : null,
           followUpSuggestions: parseResult.suggestions,
           isTruncated: isTruncated,
           finishReason: finishReason,
@@ -2200,8 +2236,7 @@ class SciChatProvider extends ChangeNotifier {
             final parseResult = FollowUpParser.parse(response);
             final validatedCitationPages =
                 _extractValidatedCitationPages(papers);
-            final validatedSectionPages =
-                _extractValidatedSectionPages(papers);
+            final validatedSectionPages = _extractValidatedSectionPages(papers);
             final doneMsg = thinkingMsg.copyWith(
               content: parseResult.cleanContent,
               status: MessageStatus.done,
@@ -2476,12 +2511,10 @@ class SciChatProvider extends ChangeNotifier {
         content: parseResult.cleanContent,
         status: MessageStatus.done,
         papers: papers,
-        validatedCitationPages: validatedCitationPages.isNotEmpty
-            ? validatedCitationPages
-            : null,
-        validatedSectionPages: validatedSectionPages.isNotEmpty
-            ? validatedSectionPages
-            : null,
+        validatedCitationPages:
+            validatedCitationPages.isNotEmpty ? validatedCitationPages : null,
+        validatedSectionPages:
+            validatedSectionPages.isNotEmpty ? validatedSectionPages : null,
         followUpSuggestions: parseResult.suggestions,
         isTruncated: isTruncated,
         finishReason: finishReason,
@@ -2527,9 +2560,8 @@ class SciChatProvider extends ChangeNotifier {
             validatedCitationPages: validatedCitationPages.isNotEmpty
                 ? validatedCitationPages
                 : null,
-            validatedSectionPages: validatedSectionPages.isNotEmpty
-                ? validatedSectionPages
-                : null,
+            validatedSectionPages:
+                validatedSectionPages.isNotEmpty ? validatedSectionPages : null,
             followUpSuggestions: parseResult.suggestions,
             isTruncated: false,
             finishReason: 'stop',

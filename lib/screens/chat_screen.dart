@@ -109,12 +109,17 @@ class _ChatScreenState extends State<ChatScreen> {
       setState(() => _composerHeight = h);
       // Jaga posisi dasar agar pesan terakhir tetap terlihat di atas composer tanpa snap paksa
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted && !_userScrolledUp && !_isUserDragging && _scrollController.hasClients) {
+        if (mounted &&
+            !_userScrolledUp &&
+            !_isUserDragging &&
+            _scrollController.hasClients) {
           _scrollToBottomIfNearBottom(threshold: 200.0);
         }
       });
     }
   }
+
+  SciChatProvider? _provider;
 
   @override
   void initState() {
@@ -126,14 +131,57 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final prov = Provider.of<SciChatProvider>(context, listen: false);
+    if (_provider != prov) {
+      _provider?.removeListener(_onProviderChanged);
+      _provider = prov;
+      _provider?.addListener(_onProviderChanged);
+    }
+    _checkPendingPrompt();
+  }
+
+  void _onProviderChanged() {
+    _checkPendingPrompt();
+  }
+
+  void _checkPendingPrompt() {
+    if (!mounted) return;
+    final prompt = _provider?.consumeComposerPrompt();
+    if (prompt != null && prompt.isNotEmpty) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _applyPromptToComposer(prompt);
+      });
+    }
+  }
+
+  void _applyPromptToComposer(String prompt) {
+    final currentText = _controller.text.trim();
+    if (currentText.isEmpty) {
+      _controller.text = prompt;
+    } else {
+      // Pertahankan draf yang sudah diketik pengguna dan gabungkan dengan prompt baru secara rapi
+      _controller.text = '$currentText\n\n$prompt';
+    }
+    _controller.selection = TextSelection.collapsed(
+      offset: _controller.text.length,
+    );
+    _focusNode.requestFocus();
+  }
+
+  @override
   void dispose() {
+    _provider?.removeListener(_onProviderChanged);
     _controller.dispose();
     _scrollController.dispose();
     _focusNode.dispose();
     super.dispose();
   }
 
-  void _scrollToBottom({Duration duration = const Duration(milliseconds: 250)}) {
+  void _scrollToBottom(
+      {Duration duration = const Duration(milliseconds: 250)}) {
     if (mounted && _userScrolledUp) {
       setState(() => _userScrolledUp = false);
     } else {
@@ -159,13 +207,13 @@ class _ChatScreenState extends State<ChatScreen> {
       _isAutoScrolling = true;
       _scrollController
           .animateTo(
-            max,
-            duration: duration,
-            curve: Curves.easeOut,
-          )
+        max,
+        duration: duration,
+        curve: Curves.easeOut,
+      )
           .whenComplete(() {
-            _isAutoScrolling = false;
-          });
+        _isAutoScrolling = false;
+      });
     });
   }
 
@@ -180,7 +228,10 @@ class _ChatScreenState extends State<ChatScreen> {
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _hasScheduledAutoScroll = false;
-      if (!mounted || _userScrolledUp || _isUserDragging || !_scrollController.hasClients) {
+      if (!mounted ||
+          _userScrolledUp ||
+          _isUserDragging ||
+          !_scrollController.hasClients) {
         return;
       }
       final max = _scrollController.position.maxScrollExtent;
@@ -211,19 +262,18 @@ class _ChatScreenState extends State<ChatScreen> {
       _scrollController
           .animateTo(max, duration: duration, curve: curve)
           .whenComplete(() {
-            _isAutoScrolling = false;
-            if (mounted &&
-                !_userScrolledUp &&
-                !_isUserDragging &&
-                _scrollController.hasClients) {
-              final remaining =
-                  _scrollController.position.maxScrollExtent -
-                      _scrollController.position.pixels;
-              if (remaining > 1.0 && remaining <= threshold) {
-                _scrollToBottomIfNearBottom(threshold: threshold);
-              }
-            }
-          });
+        _isAutoScrolling = false;
+        if (mounted &&
+            !_userScrolledUp &&
+            !_isUserDragging &&
+            _scrollController.hasClients) {
+          final remaining = _scrollController.position.maxScrollExtent -
+              _scrollController.position.pixels;
+          if (remaining > 1.0 && remaining <= threshold) {
+            _scrollToBottomIfNearBottom(threshold: threshold);
+          }
+        }
+      });
     });
   }
 
@@ -337,8 +387,7 @@ class _ChatScreenState extends State<ChatScreen> {
                                 setState(() => _userScrolledUp = v);
                               }
                             },
-                            onIsUserDraggingChanged: (v) =>
-                                _isUserDragging = v,
+                            onIsUserDraggingChanged: (v) => _isUserDragging = v,
                             isAutoScrolling: () => _isAutoScrolling,
                             scrollToBottomIfNearBottom:
                                 _scrollToBottomIfNearBottom,
@@ -424,8 +473,9 @@ class _ChatScreenState extends State<ChatScreen> {
                           activeSkill: p.activeSkill,
                           activeContexts:
                               List<ArxivPaper>.unmodifiable(p.activeContexts),
-                          contextEvidence: Map<String, PaperEvidence>.unmodifiable(
-                              p.contextEvidence),
+                          contextEvidence:
+                              Map<String, PaperEvidence>.unmodifiable(
+                                  p.contextEvidence),
                           pendingAttachment: p.pendingAttachment,
                           deepSearch: p.deepSearch,
                           eli5Mode: p.eli5Mode,
@@ -822,8 +872,7 @@ class _MessageListView extends StatelessWidget {
         itemCount: messages.length,
         itemBuilder: (ctx, i) {
           final msg = messages[i];
-          final isLastAssistant =
-              (i == messages.length - 1) && msg.isAssistant;
+          final isLastAssistant = (i == messages.length - 1) && msg.isAssistant;
           return ChatBubble(
             key: ValueKey('msg_${msg.id}'),
             message: msg,
@@ -836,8 +885,7 @@ class _MessageListView extends StatelessWidget {
             onRetry: msg.status == MessageStatus.error && msg.content.isEmpty
                 ? () => provider.retryMessage(msg.id)
                 : null,
-            onContinue: ((msg.isTruncated &&
-                        msg.finishReason != 'cancelled') ||
+            onContinue: ((msg.isTruncated && msg.finishReason != 'cancelled') ||
                     (msg.status == MessageStatus.error &&
                         msg.content.isNotEmpty))
                 ? () => provider.continueMessage(msg.id)
@@ -845,13 +893,12 @@ class _MessageListView extends StatelessWidget {
             onDismissError: msg.status == MessageStatus.error
                 ? () => provider.dismissError(msg.id)
                 : null,
-            onRegenerate: isLastAssistant &&
-                    !provider.isLoading &&
-                    provider.apiKeySet
-                ? () => provider.regenerateLastResponse(
-                      assistantMessageId: msg.id,
-                    )
-                : null,
+            onRegenerate:
+                isLastAssistant && !provider.isLoading && provider.apiKeySet
+                    ? () => provider.regenerateLastResponse(
+                          assistantMessageId: msg.id,
+                        )
+                    : null,
             onBranch: (!provider.isLoading &&
                     msg.isAssistant &&
                     (msg.status == MessageStatus.done ||
@@ -1494,7 +1541,8 @@ class _InputAreaState extends State<_InputArea> {
                   child: Icon(
                     Icons.tune_rounded,
                     size: 18,
-                    color: _showToolsMenu || isActive ? c.accent : c.textSecondary,
+                    color:
+                        _showToolsMenu || isActive ? c.accent : c.textSecondary,
                   ),
                 ),
               ),
@@ -1543,7 +1591,8 @@ class _InputAreaState extends State<_InputArea> {
             children: [
               // Header
               Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
                 child: Row(
                   children: [
                     Icon(Icons.tune_rounded, size: 16, color: c.accent),
@@ -1564,7 +1613,8 @@ class _InputAreaState extends State<_InputArea> {
                         borderRadius: BorderRadius.circular(8),
                         child: Padding(
                           padding: const EdgeInsets.all(4),
-                          child: Icon(Icons.close, size: 18, color: c.textMuted),
+                          child:
+                              Icon(Icons.close, size: 18, color: c.textMuted),
                         ),
                       ),
                     ),
@@ -1601,7 +1651,8 @@ class _InputAreaState extends State<_InputArea> {
               ),
 
               Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
                 child: Row(
                   children: [
                     Text(
@@ -1666,7 +1717,8 @@ class _InputAreaState extends State<_InputArea> {
                 width: 32,
                 height: 32,
                 decoration: BoxDecoration(
-                  color: isActive ? c.accent.withValues(alpha: 0.12) : c.surface2,
+                  color:
+                      isActive ? c.accent.withValues(alpha: 0.12) : c.surface2,
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Icon(
@@ -1684,7 +1736,8 @@ class _InputAreaState extends State<_InputArea> {
                     Text(
                       title,
                       style: context.typography.bodyMedium?.copyWith(
-                        fontWeight: isActive ? FontWeight.w600 : FontWeight.w500,
+                        fontWeight:
+                            isActive ? FontWeight.w600 : FontWeight.w500,
                         color: isActive ? c.accent : c.textPrimary,
                       ),
                     ),
@@ -1823,11 +1876,13 @@ class _InputAreaState extends State<_InputArea> {
                   },
                   borderRadius: BorderRadius.circular(8),
                   child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Icon(Icons.description_outlined, size: 16, color: c.accent),
+                        Icon(Icons.description_outlined,
+                            size: 16, color: c.accent),
                         const SizedBox(width: 6),
                         Flexible(
                           child: Text(
@@ -1941,8 +1996,7 @@ class _InputAreaState extends State<_InputArea> {
                     Navigator.push(
                       context,
                       MaterialPageRoute(
-                        builder: (_) =>
-                            PdfViewerScreen.fromPaper(paper: paper),
+                        builder: (_) => PdfViewerScreen.fromPaper(paper: paper),
                       ),
                     );
                   },
@@ -2079,8 +2133,7 @@ class _InputAreaState extends State<_InputArea> {
         break;
       case EvidenceLevel.abstractOnly:
         statusIcon = Icons.article_outlined;
-        statusColor =
-            isDark ? const Color(0xFFFB923C) : Colors.orange.shade800;
+        statusColor = isDark ? const Color(0xFFFB923C) : Colors.orange.shade800;
         label = 'Abstract saja';
         break;
       case EvidenceLevel.noUsableText:
@@ -2183,8 +2236,7 @@ class _InputAreaState extends State<_InputArea> {
                         color: c.textSecondary,
                       ),
                     ),
-                    Icon(Icons.keyboard_arrow_up,
-                        size: 20, color: c.textMuted),
+                    Icon(Icons.keyboard_arrow_up, size: 20, color: c.textMuted),
                   ],
                 ),
               ),
@@ -2583,7 +2635,8 @@ class _SummarizeSheetState extends State<_SummarizeSheet> {
                                             ),
                                             backgroundColor: accentColor,
                                             behavior: SnackBarBehavior.floating,
-                                            duration: const Duration(seconds: 2),
+                                            duration:
+                                                const Duration(seconds: 2),
                                           ),
                                         );
                                       } else {
@@ -2594,11 +2647,9 @@ class _SummarizeSheetState extends State<_SummarizeSheet> {
                                               style: TextStyle(
                                                   color: Colors.white),
                                             ),
-                                            backgroundColor:
-                                                Color(0xFFB05050),
+                                            backgroundColor: Color(0xFFB05050),
                                             behavior: SnackBarBehavior.floating,
-                                            duration:
-                                                Duration(seconds: 2),
+                                            duration: Duration(seconds: 2),
                                           ),
                                         );
                                       }
@@ -2649,7 +2700,8 @@ class _SummarizeSheetState extends State<_SummarizeSheet> {
                           controller: controller,
                           padding: const EdgeInsets.fromLTRB(20, 16, 20, 32),
                           child: MarkdownBody(
-                            data: FollowUpParser.parse(_summary ?? '').cleanContent,
+                            data: FollowUpParser.parse(_summary ?? '')
+                                .cleanContent,
                             selectable: true,
                             builders: {
                               'latex': CustomLatexElementBuilder(context),
@@ -2796,7 +2848,8 @@ class _RenameSessionDialogState extends State<_RenameSessionDialog> {
               ),
               focusedBorder: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(8),
-                borderSide: BorderSide(color: context.colors.accent, width: 1.5),
+                borderSide:
+                    BorderSide(color: context.colors.accent, width: 1.5),
               ),
             ),
             onSubmitted: (_) => _submit(),
@@ -2974,10 +3027,8 @@ class _ResearchHistoryDrawerState extends State<ResearchHistoryDrawer> {
     return PressFeedback(
       scaleFactor: 0.985,
       child: ListTile(
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
-        tileColor:
-            isActive ? context.colors.surface2 : Colors.transparent,
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
+        tileColor: isActive ? context.colors.surface2 : Colors.transparent,
         leading: Icon(
           Icons.chat_bubble_outline,
           size: 20,
@@ -3006,65 +3057,65 @@ class _ResearchHistoryDrawerState extends State<ResearchHistoryDrawer> {
             tooltip: 'Opsi sesi',
             padding: EdgeInsets.zero,
             color: context.colors.surface1,
-          elevation: 4,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
-            side: BorderSide(color: context.colors.borderSubtle),
+            elevation: 4,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+              side: BorderSide(color: context.colors.borderSubtle),
+            ),
+            onSelected: (action) {
+              if (action == 'rename') {
+                _showRenameSessionDialog(context, provider, session);
+              } else if (action == 'delete') {
+                _confirmDeleteSession(context, provider, session);
+              }
+            },
+            itemBuilder: (menuCtx) => [
+              PopupMenuItem<String>(
+                value: 'rename',
+                height: 40,
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.edit_outlined,
+                      size: 18,
+                      color: menuCtx.colors.textSecondary,
+                    ),
+                    const SizedBox(width: 10),
+                    Text(
+                      'Ganti Nama',
+                      style: menuCtx.typography.bodyMedium?.copyWith(
+                        color: menuCtx.colors.textPrimary,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              PopupMenuItem<String>(
+                value: 'delete',
+                height: 40,
+                child: Row(
+                  children: [
+                    const Icon(
+                      Icons.delete_outline,
+                      size: 18,
+                      color: Color(0xFFD32F2F),
+                    ),
+                    const SizedBox(width: 10),
+                    Text(
+                      'Hapus',
+                      style: menuCtx.typography.bodyMedium?.copyWith(
+                        color: const Color(0xFFD32F2F),
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
-          onSelected: (action) {
-            if (action == 'rename') {
-              _showRenameSessionDialog(context, provider, session);
-            } else if (action == 'delete') {
-              _confirmDeleteSession(context, provider, session);
-            }
-          },
-          itemBuilder: (menuCtx) => [
-            PopupMenuItem<String>(
-              value: 'rename',
-              height: 40,
-              child: Row(
-                children: [
-                  Icon(
-                    Icons.edit_outlined,
-                    size: 18,
-                    color: menuCtx.colors.textSecondary,
-                  ),
-                  const SizedBox(width: 10),
-                  Text(
-                    'Ganti Nama',
-                    style: menuCtx.typography.bodyMedium?.copyWith(
-                      color: menuCtx.colors.textPrimary,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            PopupMenuItem<String>(
-              value: 'delete',
-              height: 40,
-              child: Row(
-                children: [
-                  const Icon(
-                    Icons.delete_outline,
-                    size: 18,
-                    color: Color(0xFFD32F2F),
-                  ),
-                  const SizedBox(width: 10),
-                  Text(
-                    'Hapus',
-                    style: menuCtx.typography.bodyMedium?.copyWith(
-                      color: const Color(0xFFD32F2F),
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
         ),
-      ),
-      onTap: () {
+        onTap: () {
           provider.loadSession(session.id);
           Navigator.pop(context);
         },
@@ -3395,7 +3446,8 @@ class _ActiveContextSheet extends StatelessWidget {
           });
         }
         return Padding(
-          padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
+          padding:
+              EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
           child: SafeArea(
             top: false,
             child: Column(
@@ -3423,8 +3475,8 @@ class _ActiveContextSheet extends StatelessWidget {
                       ),
                       IconButton(
                         tooltip: 'Tutup',
-                        constraints: const BoxConstraints(
-                            minWidth: 48, minHeight: 48),
+                        constraints:
+                            const BoxConstraints(minWidth: 48, minHeight: 48),
                         icon: Icon(Icons.close, size: 20, color: c.textMuted),
                         onPressed: () => Navigator.of(ctx).maybePop(),
                       ),
