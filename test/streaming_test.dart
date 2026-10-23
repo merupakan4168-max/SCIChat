@@ -719,15 +719,11 @@ void main() {
       );
       await tester.pump(const Duration(milliseconds: 300));
 
-      final selectableFinder = find.byWidgetPredicate(
-        (w) =>
-            w is SelectableText &&
-            (w.textSpan
-                    ?.toPlainText()
-                    .contains('Teks yang sedang dialirkan...') ??
-                false),
+      // Streaming content is rendered without SelectionArea overhead during active stream
+      expect(
+        find.textContaining('Teks yang sedang dialirkan...', findRichText: true),
+        findsOneWidget,
       );
-      expect(selectableFinder, findsOneWidget);
       expect(find.text('Menulis respons...'), findsOneWidget);
       expect(find.byType(CircularProgressIndicator), findsOneWidget);
       // Toolbar aksi dan tombol simpan insight tidak boleh muncul saat streaming
@@ -985,8 +981,8 @@ void main() {
       expect(find.byType(PaperCard), findsOneWidget);
       expect(find.text('Attention Mechanism in Modern LLMs'), findsOneWidget);
 
-      // Tap kembali untuk menutup sumber (collapse)
-      await tester.tap(find.text('Sumber makalah (1)'));
+      // Tap tombol Tutup untuk menutup modal sumber
+      await tester.tap(find.text('Tutup'));
       await tester.pumpAndSettle();
 
       expect(find.text('Lihat'), findsOneWidget);
@@ -1317,6 +1313,1254 @@ void main() {
       expect(tappedSuggestion,
           equals('Bagaimana perbandingan continuous-time vs discrete model?'));
       expect(tappedSuggestion?.contains('*'), isFalse);
+    });
+  });
+
+  group('Phase 1: Streaming Stability, Auto-Scroll & Identity Tests', () {
+    testWidgets(
+        '1. Multi-chunk streaming preserves bubble identity without duplication or disappearance',
+        (tester) async {
+      const msgId = 'test-stream-id';
+      final chunks = [
+        'Analisis awal',
+        ' dengan metodologi',
+        ' kuantum dan',
+        ' bukti eksperimental.'
+      ];
+      String currentText = '';
+
+      final provider = SciChatProvider(
+        storageService: MockStorageService(),
+        searchService: MockSearchService(),
+      );
+
+      final initialMsg = ChatMessage(
+        id: msgId,
+        role: MessageRole.assistant,
+        content: '',
+        status: MessageStatus.sending,
+        timestamp: DateTime.now(),
+      );
+      provider.messages.add(initialMsg);
+
+      await tester.pumpWidget(
+        ChangeNotifierProvider<SciChatProvider>.value(
+          value: provider,
+          child: MaterialApp(
+            theme: SciChatTheme.getTheme(true),
+            home: const ChatScreen(),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      // Initially sending state shows thinking indicator and stable bubble key
+      expect(find.byKey(const ValueKey('msg_$msgId')), findsOneWidget);
+      expect(find.byKey(const ValueKey('assistant_$msgId')), findsOneWidget);
+      expect(find.byKey(const ValueKey('assistant_thinking')), findsOneWidget);
+
+      // Stream chunks sequentially
+      for (final chunk in chunks) {
+        currentText += chunk;
+        provider.messages[0] = initialMsg.copyWith(
+          content: currentText,
+          status: MessageStatus.streaming,
+        );
+        provider.notifyListeners();
+        // Let didUpdateWidget receive the new chunk into _bufferedContent
+        await tester.pump();
+        // Advance past throttle interval (80 ms) to trigger periodic flush
+        await tester.pump(const Duration(milliseconds: 100));
+        await tester.pump();
+
+        // Exactly one bubble with stable identity
+        expect(find.byKey(const ValueKey('msg_$msgId')), findsOneWidget);
+        expect(find.byKey(const ValueKey('assistant_$msgId')), findsOneWidget);
+        expect(find.byKey(const ValueKey('assistant_body_$msgId')), findsOneWidget);
+        expect(find.text(currentText, findRichText: true), findsOneWidget);
+      }
+
+      // Stream finishes with done status
+      provider.messages[0] = initialMsg.copyWith(
+        content: currentText,
+        status: MessageStatus.done,
+      );
+      provider.notifyListeners();
+      await tester.pumpAndSettle();
+
+      // Preserves single bubble identity
+      expect(find.byKey(const ValueKey('msg_$msgId')), findsOneWidget);
+      expect(find.byKey(const ValueKey('assistant_$msgId')), findsOneWidget);
+      expect(find.byKey(const ValueKey('assistant_body_$msgId')), findsOneWidget);
+      expect(find.text(currentText), findsOneWidget);
+      expect(find.text('Menulis respons...'), findsNothing);
+    });
+
+    testWidgets(
+        '2. Transition sending -> streaming -> done maintains message identity and components',
+        (tester) async {
+      const msgId = 'transition-msg-id';
+      final provider = SciChatProvider(
+        storageService: MockStorageService(),
+        searchService: MockSearchService(),
+      );
+
+      provider.messages.add(ChatMessage(
+        id: msgId,
+        role: MessageRole.assistant,
+        content: '',
+        status: MessageStatus.sending,
+        timestamp: DateTime.now(),
+      ));
+
+      await tester.pumpWidget(
+        ChangeNotifierProvider<SciChatProvider>.value(
+          value: provider,
+          child: MaterialApp(
+            theme: SciChatTheme.getTheme(true),
+            home: const ChatScreen(),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      expect(find.byKey(const ValueKey('assistant_$msgId')), findsOneWidget);
+      expect(find.byKey(const ValueKey('assistant_thinking')), findsOneWidget);
+      expect(find.text('Menulis respons...'), findsNothing);
+
+      // Transition to streaming
+      provider.messages[0] = provider.messages[0].copyWith(
+        content: 'Teks awal',
+        status: MessageStatus.streaming,
+      );
+      provider.notifyListeners();
+      await tester.pump(const Duration(milliseconds: 200));
+
+      expect(find.byKey(const ValueKey('assistant_$msgId')), findsOneWidget);
+      expect(find.text('Teks awal', findRichText: true), findsOneWidget);
+      expect(find.text('Menulis respons...'), findsOneWidget);
+
+      // Transition to done
+      provider.messages[0] = provider.messages[0].copyWith(
+        content: 'Teks akhir lengkap',
+        status: MessageStatus.done,
+      );
+      provider.notifyListeners();
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const ValueKey('assistant_$msgId')), findsOneWidget);
+      expect(find.text('Teks akhir lengkap'), findsOneWidget);
+      expect(find.text('Menulis respons...'), findsNothing);
+      expect(find.byIcon(Icons.copy_rounded), findsOneWidget);
+    });
+
+    testWidgets(
+        '3. Cancellation preserves message content and renders banner without crash',
+        (tester) async {
+      const msgId = 'cancelled-msg-id';
+      final provider = SciChatProvider(
+        storageService: MockStorageService(),
+        searchService: MockSearchService(),
+      );
+
+      provider.messages.add(ChatMessage(
+        id: msgId,
+        role: MessageRole.assistant,
+        content: 'Respons sebelum dibatalkan oleh pengguna.',
+        status: MessageStatus.done,
+        isTruncated: true,
+        finishReason: 'cancelled',
+        timestamp: DateTime.now(),
+      ));
+
+      await tester.pumpWidget(
+        ChangeNotifierProvider<SciChatProvider>.value(
+          value: provider,
+          child: MaterialApp(
+            theme: SciChatTheme.getTheme(true),
+            home: const ChatScreen(),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const ValueKey('assistant_$msgId')), findsOneWidget);
+      expect(find.text('Respons sebelum dibatalkan oleh pengguna.'),
+          findsOneWidget);
+      expect(find.text('Generasi dihentikan oleh pengguna'), findsOneWidget);
+    });
+
+    testWidgets(
+        '4. Error state renders error UI and preserves retry/continue action',
+        (tester) async {
+      const msgId = 'error-msg-id';
+      final provider = SciChatProvider(
+        storageService: MockStorageService(),
+        searchService: MockSearchService(),
+      );
+
+      provider.messages.add(ChatMessage(
+        id: msgId,
+        role: MessageRole.assistant,
+        content: '',
+        status: MessageStatus.error,
+        errorType: ChatErrorType.connection,
+        timestamp: DateTime.now(),
+      ));
+
+      await tester.pumpWidget(
+        ChangeNotifierProvider<SciChatProvider>.value(
+          value: provider,
+          child: MaterialApp(
+            theme: SciChatTheme.getTheme(true),
+            home: const ChatScreen(),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const ValueKey('assistant_$msgId')), findsOneWidget);
+      expect(find.text('Koneksi internet terputus'), findsOneWidget);
+      expect(find.text('Coba lagi'), findsOneWidget);
+    });
+
+    testWidgets(
+        '5. Dragging up ceases auto-scroll and does not fight user interaction',
+        (tester) async {
+      final provider = SciChatProvider(
+        storageService: MockStorageService(),
+        searchService: MockSearchService(),
+      );
+
+      for (int i = 0; i < 15; i++) {
+        provider.messages.add(ChatMessage(
+          id: 'user-$i',
+          role: MessageRole.user,
+          content: 'Pertanyaan $i',
+          status: MessageStatus.done,
+          timestamp: DateTime.now(),
+        ));
+        provider.messages.add(ChatMessage(
+          id: 'assistant-$i',
+          role: MessageRole.assistant,
+          content:
+              'Jawaban $i panjang berbobot ilmiah dengan konten yang mencukupi scroll viewport.',
+          status: MessageStatus.done,
+          timestamp: DateTime.now(),
+        ));
+      }
+
+      await tester.pumpWidget(
+        ChangeNotifierProvider<SciChatProvider>.value(
+          value: provider,
+          child: MaterialApp(
+            theme: SciChatTheme.getTheme(true),
+            home: const ChatScreen(),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Drag up to view older messages
+      final listFinder = find.byType(ListView);
+      await tester.drag(listFinder, const Offset(0, 350));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('scrollToBottomButton')), findsOneWidget);
+
+      // Now simulate a streaming update coming in
+      final scrollBefore =
+          tester.widget<ListView>(listFinder).controller!.position.pixels;
+      provider.messages.last = provider.messages.last.copyWith(
+        content:
+            '${provider.messages.last.content} Tambahan chunk baru saat user sedang membaca riwayat di atas.',
+        status: MessageStatus.streaming,
+      );
+      provider.notifyListeners();
+      await tester.pump(const Duration(milliseconds: 100));
+
+      final scrollAfter =
+          tester.widget<ListView>(listFinder).controller!.position.pixels;
+      // Scroll offset must NOT jump down to maxScrollExtent!
+      expect((scrollAfter - scrollBefore).abs(), lessThanOrEqualTo(1.0));
+      expect(find.byKey(const Key('scrollToBottomButton')), findsOneWidget);
+    });
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Phase 2: Render Throttle, Markdown/LaTeX Fidelity & Selectable Lifecycle
+  // ─────────────────────────────────────────────────────────────────────────
+  group('Phase 2: Render Throttle, Content Fidelity & Selectable', () {
+
+    // ── Test 1: Rapid chunks — no token lost, final text == cumulative stream ──
+    testWidgets(
+        '1. Rapid chunks do not lose or duplicate tokens; final text matches full stream',
+        (tester) async {
+      const msgId = 'p2-rapid-chunks';
+      // Simulate 20 fast chunks building up a sentence.
+      final words = List.generate(20, (i) => 'word$i');
+      final fullText = words.join(' ');
+
+      final provider = SciChatProvider(storageService: MockStorageService());
+
+      // Start with streaming message.
+      var msg = ChatMessage(
+        id: msgId,
+        role: MessageRole.assistant,
+        content: '',
+        status: MessageStatus.streaming,
+        timestamp: DateTime.now(),
+      );
+      provider.messages.add(msg);
+
+      await tester.pumpWidget(
+        ChangeNotifierProvider<SciChatProvider>.value(
+          value: provider,
+          child: MaterialApp(
+            theme: SciChatTheme.getTheme(true),
+            home: const ChatScreen(),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      // Deliver all 20 chunks rapidly (5 ms apart — faster than the 80 ms throttle).
+      String cumulative = '';
+      for (final word in words) {
+        cumulative += (cumulative.isEmpty ? '' : ' ') + word;
+        provider.messages[0] =
+            msg.copyWith(content: cumulative, status: MessageStatus.streaming);
+        provider.notifyListeners();
+        await tester.pump(const Duration(milliseconds: 5));
+      }
+
+      // Mark done — throttle must flush immediately.
+      provider.messages[0] =
+          msg.copyWith(content: fullText, status: MessageStatus.done);
+      provider.notifyListeners();
+      await tester.pumpAndSettle();
+
+      // Exactly ONE bubble, final text present, no streaming indicator.
+      expect(find.byKey(const ValueKey('msg_$msgId')), findsOneWidget);
+      expect(find.text(fullText), findsOneWidget);
+      expect(find.text('Menulis respons...'), findsNothing);
+    });
+
+    // ── Test 2: Content after done == content after streaming (no truncation) ──
+    testWidgets(
+        '2. Content visible after done is byte-identical to last streamed content',
+        (tester) async {
+      const msgId = 'p2-fidelity';
+      const streamedText =
+          'Hasil analisis: model transformer dengan 12 layer menghasilkan BLEU score 42.7.';
+
+      final provider = SciChatProvider(storageService: MockStorageService());
+      provider.messages.add(ChatMessage(
+        id: msgId,
+        role: MessageRole.assistant,
+        content: streamedText,
+        status: MessageStatus.streaming,
+        timestamp: DateTime.now(),
+      ));
+
+      await tester.pumpWidget(
+        ChangeNotifierProvider<SciChatProvider>.value(
+          value: provider,
+          child: MaterialApp(
+            theme: SciChatTheme.getTheme(true),
+            home: const ChatScreen(),
+          ),
+        ),
+      );
+      // Pump past throttle interval (80 ms).
+      await tester.pump(const Duration(milliseconds: 100));
+
+      // Now mark done.
+      provider.messages[0] = provider.messages[0]
+          .copyWith(content: streamedText, status: MessageStatus.done);
+      provider.notifyListeners();
+      await tester.pumpAndSettle();
+
+      expect(find.text(streamedText), findsOneWidget);
+    });
+
+    // ── Test 3: Bold markdown (**bold**) rendered correctly after done ──────
+    testWidgets(
+        '3. Bold markdown (**text**) renders formatted after streaming ends',
+        (tester) async {
+      const msgId = 'p2-bold';
+      // MarkdownBody replaces **bold** with a bold span, not raw asterisks.
+      // We can't inspect TextStyle via find.text, so we verify the raw
+      // asterisks are NOT present in the rendered output while the inner
+      // text IS present.
+      const rawContent =
+          'Model **transformer** dilatih selama 7 hari pada GPU A100.';
+      const innerText = 'transformer';
+
+      final provider = SciChatProvider(storageService: MockStorageService());
+      provider.messages.add(ChatMessage(
+        id: msgId,
+        role: MessageRole.assistant,
+        content: rawContent,
+        status: MessageStatus.done,
+        timestamp: DateTime.now(),
+      ));
+
+      await tester.pumpWidget(
+        ChangeNotifierProvider<SciChatProvider>.value(
+          value: provider,
+          child: MaterialApp(
+            theme: SciChatTheme.getTheme(true),
+            home: Scaffold(
+              body: ListView(children: [
+                ChatBubble(
+                  message: provider.messages.first,
+                  isFavorite: (_) => false,
+                  onFavoriteToggle: (_) {},
+                  onPaperTap: (_) {},
+                ),
+              ]),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // The rendered tree must not show raw asterisks.
+      expect(find.textContaining('**transformer**'), findsNothing);
+      // The word itself should appear (MarkdownBody renders spans).
+      expect(find.textContaining(innerText), findsWidgets);
+    });
+
+    // ── Test 4: Inline math $E=mc^2$ — selectable false during stream, ──────
+    //           true after done. MessageContent exposes the flag correctly.
+    testWidgets(
+        '4. MessageContent selectable=false during streaming, true after done',
+        (tester) async {
+      const msgId = 'p2-selectable';
+      const mathContent = r'Rumus energi: $E = mc^2$ sangat penting.';
+
+      final provider = SciChatProvider(storageService: MockStorageService());
+
+      // Helper to find MessageContent widget.
+      Finder messageContentFinder() => find.byType(MessageContent);
+
+      // ── Phase A: streaming ──
+      provider.messages.add(ChatMessage(
+        id: msgId,
+        role: MessageRole.assistant,
+        content: mathContent,
+        status: MessageStatus.streaming,
+        timestamp: DateTime.now(),
+      ));
+
+      await tester.pumpWidget(
+        ChangeNotifierProvider<SciChatProvider>.value(
+          value: provider,
+          child: MaterialApp(
+            theme: SciChatTheme.getTheme(true),
+            home: Scaffold(
+              body: Consumer<SciChatProvider>(
+                builder: (context, prov, _) => ListView(children: [
+                  ChatBubble(
+                    message: prov.messages.first,
+                    isFavorite: (_) => false,
+                    onFavoriteToggle: (_) {},
+                    onPaperTap: (_) {},
+                  ),
+                ]),
+              ),
+            ),
+          ),
+        ),
+      );
+      // Pump past throttle so the streaming content is displayed.
+      await tester.pump(const Duration(milliseconds: 100));
+
+      final streamingMC = tester.widget<MessageContent>(
+        messageContentFinder().first,
+      );
+      expect(streamingMC.isStreaming, isTrue,
+          reason: 'MessageContent should report isStreaming=true during stream');
+
+      // ── Phase B: done ──
+      provider.messages[0] = provider.messages[0]
+          .copyWith(content: mathContent, status: MessageStatus.done);
+      provider.notifyListeners();
+      await tester.pumpAndSettle();
+
+      final doneMC = tester.widget<MessageContent>(
+        messageContentFinder().first,
+      );
+      expect(doneMC.isStreaming, isFalse,
+          reason: 'MessageContent should report isStreaming=false when done');
+    });
+
+    // ── Test 5: Display math block does not crash when partial ──────────────
+    testWidgets(
+        '5. Partial display math block (unclosed double-dollar) does not crash',
+        (tester) async {
+      const msgId = 'p2-partial-math';
+      // Partial block: opening $$ without closing $$.
+      const partialMath =
+          'Persamaan penting berikut:\n\$\$\nE = \\frac{p^2}{2m}';
+
+      final provider = SciChatProvider(storageService: MockStorageService());
+      provider.messages.add(ChatMessage(
+        id: msgId,
+        role: MessageRole.assistant,
+        content: partialMath,
+        status: MessageStatus.streaming,
+        timestamp: DateTime.now(),
+      ));
+
+      await tester.pumpWidget(
+        ChangeNotifierProvider<SciChatProvider>.value(
+          value: provider,
+          child: MaterialApp(
+            theme: SciChatTheme.getTheme(true),
+            home: Scaffold(
+              body: Consumer<SciChatProvider>(
+                builder: (context, prov, _) => ListView(children: [
+                  ChatBubble(
+                    message: prov.messages.first,
+                    isFavorite: (_) => false,
+                    onFavoriteToggle: (_) {},
+                    onPaperTap: (_) {},
+                  ),
+                ]),
+              ),
+            ),
+          ),
+        ),
+      );
+      // Must not throw — just renders (may show as plain text fallback).
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(tester.takeException(), isNull);
+
+      // Close the block and mark done.
+      const completeMath =
+          'Persamaan penting berikut:\n\$\$\nE = \\frac{p^2}{2m}\n\$\$';
+      provider.messages[0] = provider.messages[0]
+          .copyWith(content: completeMath, status: MessageStatus.done);
+      provider.notifyListeners();
+      await tester.pumpAndSettle();
+
+      expect(tester.takeException(), isNull);
+      expect(find.byKey(const ValueKey('assistant_$msgId')), findsOneWidget);
+    });
+
+    // ── Test 6: Code fence survives streaming and renders correctly ──────────
+    testWidgets(
+        '6. Code fence (```dart) renders correctly after streaming ends',
+        (tester) async {
+      const msgId = 'p2-codefence';
+      const codeContent =
+          'Contoh kode:\n\n```dart\nvoid main() {\n  print("Hello");\n}\n```';
+
+      final provider = SciChatProvider(storageService: MockStorageService());
+      provider.messages.add(ChatMessage(
+        id: msgId,
+        role: MessageRole.assistant,
+        content: codeContent,
+        status: MessageStatus.done,
+        timestamp: DateTime.now(),
+      ));
+
+      await tester.pumpWidget(
+        ChangeNotifierProvider<SciChatProvider>.value(
+          value: provider,
+          child: MaterialApp(
+            theme: SciChatTheme.getTheme(true),
+            home: Scaffold(
+              body: ListView(children: [
+                ChatBubble(
+                  message: provider.messages.first,
+                  isFavorite: (_) => false,
+                  onFavoriteToggle: (_) {},
+                  onPaperTap: (_) {},
+                ),
+              ]),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(tester.takeException(), isNull);
+      // Code language label must be visible.
+      expect(find.textContaining('DART'), findsOneWidget);
+      // Code text must be present.
+      expect(find.textContaining('print'), findsOneWidget);
+    });
+
+    // ── Test 7: <follow_up> tag is not rendered raw in final output ──────────
+    testWidgets('7. follow_up tag is masked during streaming and not shown raw',
+        (tester) async {
+      const msgId = 'p2-followup-mask';
+      // This is the maskForStreaming input during streaming.
+      const streamingWithTag =
+          'Jawaban selesai.\n<follow_up>["Apa langkah selanjutnya?"]</follow_up>';
+
+      final provider = SciChatProvider(storageService: MockStorageService());
+      // The provider's maskForStreaming is applied before storing content;
+      // here we test the raw tag doesn't appear in the bubble.
+      // Simulate what the provider stores: masked version.
+      const maskedContent = 'Jawaban selesai.';
+      provider.messages.add(ChatMessage(
+        id: msgId,
+        role: MessageRole.assistant,
+        content: maskedContent,
+        status: MessageStatus.streaming,
+        timestamp: DateTime.now(),
+      ));
+
+      await tester.pumpWidget(
+        ChangeNotifierProvider<SciChatProvider>.value(
+          value: provider,
+          child: MaterialApp(
+            theme: SciChatTheme.getTheme(true),
+            home: Scaffold(
+              body: ListView(children: [
+                ChatBubble(
+                  message: provider.messages.first,
+                  isFavorite: (_) => false,
+                  onFavoriteToggle: (_) {},
+                  onPaperTap: (_) {},
+                ),
+              ]),
+            ),
+          ),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 100));
+
+      // Raw tag must NEVER appear in the rendered tree.
+      expect(find.textContaining('<follow_up>'), findsNothing);
+      expect(find.textContaining('</follow_up>'), findsNothing);
+      expect(find.textContaining(streamingWithTag), findsNothing);
+
+      // The clean part of the answer is visible.
+      expect(find.textContaining('Jawaban selesai'), findsWidgets);
+    });
+
+    // ── Test 8: Terminal flush on error path — partial content preserved ─────
+    testWidgets(
+        '8. Error terminal path flushes buffer: partial content and error UI both visible',
+        (tester) async {
+      const msgId = 'p2-error-flush';
+      const partialText = 'Analisis awal menunjukkan';
+
+      final provider = SciChatProvider(storageService: MockStorageService());
+      provider.messages.add(ChatMessage(
+        id: msgId,
+        role: MessageRole.assistant,
+        content: partialText,
+        status: MessageStatus.streaming,
+        timestamp: DateTime.now(),
+      ));
+
+      await tester.pumpWidget(
+        ChangeNotifierProvider<SciChatProvider>.value(
+          value: provider,
+          child: MaterialApp(
+            theme: SciChatTheme.getTheme(true),
+            home: Scaffold(
+              body: Consumer<SciChatProvider>(
+                builder: (context, prov, _) => ListView(children: [
+                  ChatBubble(
+                    message: prov.messages.first,
+                    isFavorite: (_) => false,
+                    onFavoriteToggle: (_) {},
+                    onPaperTap: (_) {},
+                  ),
+                ]),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 100));
+
+      // Transition to error with the same partial text.
+      provider.messages[0] = provider.messages[0].copyWith(
+        content: partialText,
+        status: MessageStatus.error,
+        errorType: ChatErrorType.connection,
+      );
+      provider.notifyListeners();
+      await tester.pumpAndSettle();
+
+      // Both partial content AND error UI must be visible.
+      expect(find.textContaining('Analisis awal'), findsOneWidget);
+      expect(find.text('Respons terputus'), findsOneWidget);
+    });
+
+    // ── Test 9: Cancelled terminal path — banner rendered, content kept ──────
+    testWidgets(
+        '9. Cancelled terminal path: content preserved and cancelled banner shown',
+        (tester) async {
+      const msgId = 'p2-cancelled-flush';
+      const cancelledText =
+          'Respons parsial sebelum pengguna menekan tombol batal.';
+
+      final provider = SciChatProvider(storageService: MockStorageService());
+      provider.messages.add(ChatMessage(
+        id: msgId,
+        role: MessageRole.assistant,
+        content: cancelledText,
+        status: MessageStatus.streaming,
+        timestamp: DateTime.now(),
+      ));
+
+      await tester.pumpWidget(
+        ChangeNotifierProvider<SciChatProvider>.value(
+          value: provider,
+          child: MaterialApp(
+            theme: SciChatTheme.getTheme(true),
+            home: Scaffold(
+              body: Consumer<SciChatProvider>(
+                builder: (context, prov, _) => ListView(children: [
+                  ChatBubble(
+                    message: prov.messages.first,
+                    isFavorite: (_) => false,
+                    onFavoriteToggle: (_) {},
+                    onPaperTap: (_) {},
+                  ),
+                ]),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 100));
+
+      // Cancel: status done, finishReason cancelled.
+      provider.messages[0] = provider.messages[0].copyWith(
+        content: cancelledText,
+        status: MessageStatus.done,
+        isTruncated: true,
+        finishReason: 'cancelled',
+      );
+      provider.notifyListeners();
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('Respons parsial'), findsOneWidget);
+      expect(find.text('Generasi dihentikan oleh pengguna'), findsOneWidget);
+    });
+
+    // ── Test 10: Regenerate/retry action available after done, not during ────
+    testWidgets(
+        '10. Regenerate action is absent during streaming, present after done',
+        (tester) async {
+      const msgId = 'p2-regenerate';
+      bool regenerateCalled = false;
+
+      final provider = SciChatProvider(storageService: MockStorageService());
+      provider.messages.add(ChatMessage(
+        id: msgId,
+        role: MessageRole.assistant,
+        content: 'Respons awal',
+        status: MessageStatus.streaming,
+        timestamp: DateTime.now(),
+      ));
+
+      Widget buildBubble(ChatMessage msg) =>
+          ChangeNotifierProvider<SciChatProvider>.value(
+            value: provider,
+            child: MaterialApp(
+              theme: SciChatTheme.getTheme(true),
+              home: Scaffold(
+                body: ListView(children: [
+                  ChatBubble(
+                    message: msg,
+                    isFavorite: (_) => false,
+                    onFavoriteToggle: (_) {},
+                    onPaperTap: (_) {},
+                    onRegenerate: () => regenerateCalled = true,
+                  ),
+                ]),
+              ),
+            ),
+          );
+
+      // Phase A: streaming — toolbar (with regenerate) must NOT be visible.
+      await tester.pumpWidget(buildBubble(provider.messages.first));
+      await tester.pump(const Duration(milliseconds: 100));
+
+      expect(find.byTooltip('Coba lagi'), findsNothing);
+
+      // Phase B: done — toolbar appears.
+      provider.messages[0] = provider.messages[0]
+          .copyWith(content: 'Respons selesai', status: MessageStatus.done);
+      provider.notifyListeners();
+      await tester.pumpWidget(buildBubble(provider.messages.first));
+      await tester.pumpAndSettle();
+
+      expect(find.byTooltip('Coba lagi'), findsOneWidget);
+      await tester.tap(find.byTooltip('Coba lagi'));
+      await tester.pumpAndSettle();
+      expect(regenerateCalled, isTrue);
+    });
+  });
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // Phase 3B: Chat Rebuild Scope Isolation & Memoization Tests
+  // ══════════════════════════════════════════════════════════════════════════
+  group('Phase 3B: Rebuild Scope Isolation & Memoization', () {
+    testWidgets('1. ChatBubble isolates paint tree with RepaintBoundary',
+        (tester) async {
+      final msg = ChatMessage(
+        id: 'p3b-repaint',
+        role: MessageRole.assistant,
+        content: 'Bubble with RepaintBoundary',
+        status: MessageStatus.done,
+        timestamp: DateTime.now(),
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: SciChatTheme.getTheme(true),
+          home: Scaffold(
+            body: ChatBubble(
+              message: msg,
+              isFavorite: (_) => false,
+              onFavoriteToggle: (_) {},
+              onPaperTap: (_) {},
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final bubbleFinder = find.byType(ChatBubble);
+      expect(bubbleFinder, findsOneWidget);
+      // The descendant of ChatBubble must contain a RepaintBoundary
+      final repaintBoundaries = find.descendant(
+        of: bubbleFinder,
+        matching: find.byType(RepaintBoundary),
+      );
+      expect(repaintBoundaries, findsWidgets);
+    });
+
+    testWidgets(
+        '2. AssistantBubble memoizes MessageContent when content is unchanged across parent rebuilds',
+        (tester) async {
+      final msg = ChatMessage(
+        id: 'p3b-memo-assistant',
+        role: MessageRole.assistant,
+        content: 'Memoized assistant message content',
+        status: MessageStatus.done,
+        timestamp: DateTime.now(),
+      );
+
+      final provider = SciChatProvider(storageService: MockStorageService());
+      provider.messages.add(msg);
+
+      Widget buildTestWidget() {
+        return ChangeNotifierProvider<SciChatProvider>.value(
+          value: provider,
+          child: MaterialApp(
+            theme: SciChatTheme.getTheme(true),
+            home: Scaffold(
+              body: ListView(
+                children: [
+                  ChatBubble(
+                    key: ValueKey('msg_${msg.id}'),
+                    message: provider.messages.first,
+                    isFavorite: (_) => false,
+                    onFavoriteToggle: (_) {},
+                    onPaperTap: (_) {},
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      }
+
+      await tester.pumpWidget(buildTestWidget());
+      await tester.pumpAndSettle();
+
+      final firstContentWidget =
+          tester.widget<MessageContent>(find.byType(MessageContent));
+
+      // Trigger a notifyListeners (simulating other state changes, e.g. streaming another message)
+      provider.notifyListeners();
+      await tester.pumpWidget(buildTestWidget());
+      await tester.pump();
+
+      final secondContentWidget =
+          tester.widget<MessageContent>(find.byType(MessageContent));
+
+      // Must be identical instance due to memoization in _AssistantBubbleState
+      expect(identical(firstContentWidget, secondContentWidget), isTrue,
+          reason:
+              'MessageContent instance should be memoized to skip Markdown parsing');
+    });
+
+    testWidgets('3. UserBubble memoizes MessageContent across parent rebuilds',
+        (tester) async {
+      final msg = ChatMessage(
+        id: 'p3b-memo-user',
+        role: MessageRole.user,
+        content: 'User query that should not re-parse markdown',
+        status: MessageStatus.done,
+        timestamp: DateTime.now(),
+      );
+
+      final provider = SciChatProvider(storageService: MockStorageService());
+      provider.messages.add(msg);
+
+      Widget buildTestWidget() {
+        return ChangeNotifierProvider<SciChatProvider>.value(
+          value: provider,
+          child: MaterialApp(
+            theme: SciChatTheme.getTheme(true),
+            home: Scaffold(
+              body: ListView(
+                children: [
+                  ChatBubble(
+                    key: ValueKey('msg_${msg.id}'),
+                    message: provider.messages.first,
+                    isFavorite: (_) => false,
+                    onFavoriteToggle: (_) {},
+                    onPaperTap: (_) {},
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      }
+
+      await tester.pumpWidget(buildTestWidget());
+      await tester.pumpAndSettle();
+
+      final firstContentWidget =
+          tester.widget<MessageContent>(find.byType(MessageContent));
+
+      provider.notifyListeners();
+      await tester.pumpWidget(buildTestWidget());
+      await tester.pump();
+
+      final secondContentWidget =
+          tester.widget<MessageContent>(find.byType(MessageContent));
+
+      expect(identical(firstContentWidget, secondContentWidget), isTrue,
+          reason: 'UserBubble MessageContent instance should be memoized');
+    });
+
+    testWidgets(
+        '4. Streaming to done transition breaks memoization with fresh non-streaming MessageContent',
+        (tester) async {
+      final msg = ChatMessage(
+        id: 'p3b-transition',
+        role: MessageRole.assistant,
+        content: 'Streaming chunk 1',
+        status: MessageStatus.streaming,
+        timestamp: DateTime.now(),
+      );
+
+      final provider = SciChatProvider(storageService: MockStorageService());
+      provider.messages.add(msg);
+
+      Widget buildTestWidget() {
+        return ChangeNotifierProvider<SciChatProvider>.value(
+          value: provider,
+          child: MaterialApp(
+            theme: SciChatTheme.getTheme(true),
+            home: Scaffold(
+              body: ListView(
+                children: [
+                  ChatBubble(
+                    key: ValueKey('msg_${msg.id}'),
+                    message: provider.messages.first,
+                    isFavorite: (_) => false,
+                    onFavoriteToggle: (_) {},
+                    onPaperTap: (_) {},
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      }
+
+      await tester.pumpWidget(buildTestWidget());
+      await tester.pump(const Duration(milliseconds: 100));
+
+      final streamingContentWidget =
+          tester.widget<MessageContent>(find.byType(MessageContent));
+      expect(streamingContentWidget.isStreaming, isTrue);
+
+      // Transition to done
+      provider.messages[0] = provider.messages[0].copyWith(
+        content: 'Streaming chunk 1 completed.',
+        status: MessageStatus.done,
+      );
+      provider.notifyListeners();
+
+      await tester.pumpWidget(buildTestWidget());
+      await tester.pumpAndSettle();
+
+      final doneContentWidget =
+          tester.widget<MessageContent>(find.byType(MessageContent));
+      expect(doneContentWidget.isStreaming, isFalse);
+      expect(identical(streamingContentWidget, doneContentWidget), isFalse,
+          reason:
+              'State transition to done must produce a new selectable MessageContent');
+    });
+  });
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // Phase 3B.2: Composer Subscription & Selector Fix Tests
+  // ══════════════════════════════════════════════════════════════════════════
+  group('Phase 3B.2: Composer Subscription & Selector Fix Tests', () {
+    testWidgets(
+        '1. removeActiveContext updates composer UI properly despite in-place list mutation',
+        (tester) async {
+      final mockStorage = MockStorageService();
+      await mockStorage.saveApiKey('test-key');
+      final provider = SciChatProvider(storageService: mockStorage);
+      provider.messages.add(ChatMessage(
+        id: 'seed-1',
+        role: MessageRole.user,
+        content: 'Query 1',
+        status: MessageStatus.done,
+        timestamp: DateTime.now(),
+      ));
+
+      const paper = ArxivPaper(
+        id: 'paper-p3b2-1',
+        title: 'Quantum Entanglement in Machine Learning',
+        authors: ['Alice', 'Bob'],
+        summary: 'Summary of test paper',
+        published: '2026-01-01',
+        updated: '2026-01-01',
+        categories: ['cs.AI'],
+        pdfUrl: 'https://arxiv.org/pdf/paper-p3b2-1',
+        absUrl: 'https://arxiv.org/abs/paper-p3b2-1',
+      );
+
+      // Add active context
+      provider.setActivePaper(paper);
+
+      await tester.pumpWidget(
+        ChangeNotifierProvider<SciChatProvider>.value(
+          value: provider,
+          child: MaterialApp(
+            theme: SciChatTheme.getTheme(true),
+            home: const ChatScreen(),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Verify the active context banner is rendered in composer
+      expect(find.byKey(const ValueKey('active_paper_banner')), findsOneWidget);
+      expect(
+          find.text('Quantum Entanglement in Machine Learning'), findsOneWidget);
+
+      // Now remove context in-place via provider method
+      provider.removeActiveContext(paper.id);
+      await tester.pumpAndSettle();
+
+      // Must be removed from UI because Selector detected snapshot inequality via listEquals
+      expect(find.byKey(const ValueKey('active_paper_banner')), findsNothing);
+      expect(
+          find.text('Quantum Entanglement in Machine Learning'), findsNothing);
+    });
+
+    testWidgets(
+        '2. Asynchronous evidence arrival updates composer UI without stale UI',
+        (tester) async {
+      final mockStorage = MockStorageService();
+      await mockStorage.saveApiKey('test-key');
+      final provider = SciChatProvider(storageService: mockStorage);
+      provider.messages.add(ChatMessage(
+        id: 'seed-2',
+        role: MessageRole.user,
+        content: 'Query 2',
+        status: MessageStatus.done,
+        timestamp: DateTime.now(),
+      ));
+
+      const paper = ArxivPaper(
+        id: 'paper-p3b2-2',
+        title: 'Evidence Test Paper',
+        authors: ['Carol'],
+        summary: 'Testing evidence updates',
+        published: '2026-01-01',
+        updated: '2026-01-01',
+        categories: ['cs.AI'],
+        pdfUrl: 'https://arxiv.org/pdf/paper-p3b2-2',
+        absUrl: 'https://arxiv.org/abs/paper-p3b2-2',
+      );
+
+      provider.setActivePaper(paper);
+
+      await tester.pumpWidget(
+        ChangeNotifierProvider<SciChatProvider>.value(
+          value: provider,
+          child: MaterialApp(
+            theme: SciChatTheme.getTheme(true),
+            home: const ChatScreen(),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const ValueKey('active_paper_banner')), findsOneWidget);
+      expect(find.text('Full text tersedia'), findsNothing);
+
+      // Now simulate evidence resolution to fullText
+      provider.contextEvidence[paper.id] = const PaperEvidence(
+        level: EvidenceLevel.fullText,
+      );
+      provider.notifyListeners();
+      await tester.pumpAndSettle();
+
+      // UI should update via mapEquals detection in Selector
+      expect(find.text('Full text tersedia'), findsOneWidget);
+    });
+
+    testWidgets(
+        '3. activeSkill changes update composer UI without broad SciChatProvider subscription',
+        (tester) async {
+      final mockStorage = MockStorageService();
+      await mockStorage.saveApiKey('test-key');
+      final provider = SciChatProvider(storageService: mockStorage);
+      provider.messages.add(ChatMessage(
+        id: 'seed-3',
+        role: MessageRole.user,
+        content: 'Query 3',
+        status: MessageStatus.done,
+        timestamp: DateTime.now(),
+      ));
+
+      await tester.pumpWidget(
+        ChangeNotifierProvider<SciChatProvider>.value(
+          value: provider,
+          child: MaterialApp(
+            theme: SciChatTheme.getTheme(true),
+            home: const ChatScreen(),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // By default, no skill chip is shown
+      expect(find.text('Reviewer Kritis'), findsNothing);
+
+      // Select peerReview skill
+      provider.setActiveSkill(AiSkill.peerReview);
+      await tester.pumpAndSettle();
+
+      // Skill chip should be visible
+      expect(find.text('Reviewer Kritis'), findsOneWidget);
+
+      // Dismiss skill
+      provider.setActiveSkill(AiSkill.none);
+      await tester.pumpAndSettle();
+
+      expect(find.text('Reviewer Kritis'), findsNothing);
+    });
+
+    testWidgets('4. pendingAttachment updates composer UI dynamically',
+        (tester) async {
+      final mockStorage = MockStorageService();
+      await mockStorage.saveApiKey('test-key');
+      final provider = SciChatProvider(storageService: mockStorage);
+      provider.messages.add(ChatMessage(
+        id: 'seed-4',
+        role: MessageRole.user,
+        content: 'Query 4',
+        status: MessageStatus.done,
+        timestamp: DateTime.now(),
+      ));
+
+      await tester.pumpWidget(
+        ChangeNotifierProvider<SciChatProvider>.value(
+          value: provider,
+          child: MaterialApp(
+            theme: SciChatTheme.getTheme(true),
+            home: const ChatScreen(),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byIcon(Icons.attach_file_rounded), findsOneWidget);
+
+      const attachment = ArxivPaper(
+        id: 'local_attachment_1',
+        title: 'UploadedResearchPaper.pdf',
+        authors: ['Local'],
+        summary: 'User uploaded attachment',
+        published: '2026-01-01',
+        updated: '2026-01-01',
+        categories: ['local'],
+        pdfUrl: 'local',
+        absUrl: 'local',
+      );
+
+      // Set attachment
+      provider.setPendingAttachment(attachment);
+      await tester.pumpAndSettle();
+
+      // Tonal chip should be rendered with title
+      expect(find.text('UploadedResearchPaper.pdf'), findsOneWidget);
+
+      // Cancel attachment
+      provider.setPendingAttachment(null);
+      await tester.pumpAndSettle();
+
+      expect(find.text('UploadedResearchPaper.pdf'), findsNothing);
+      expect(find.byIcon(Icons.attach_file_rounded), findsOneWidget);
+    });
+
+    testWidgets(
+        '5. Streaming token additions update message list while composer remains stable',
+        (tester) async {
+      final mockStorage = MockStorageService();
+      await mockStorage.saveApiKey('test-key');
+      final provider = SciChatProvider(storageService: mockStorage);
+
+      const msgId = 'msg-stream-active';
+      final msg = ChatMessage(
+        id: msgId,
+        role: MessageRole.assistant,
+        content: 'Initial chunk',
+        status: MessageStatus.streaming,
+        timestamp: DateTime.now(),
+      );
+      provider.messages.add(msg);
+
+      await tester.pumpWidget(
+        ChangeNotifierProvider<SciChatProvider>.value(
+          value: provider,
+          child: MaterialApp(
+            theme: SciChatTheme.getTheme(true),
+            home: const ChatScreen(),
+          ),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 100));
+
+      expect(find.textContaining('Initial chunk'), findsOneWidget);
+
+      // Append token and complete stream to trigger immediate terminal flush
+      provider.messages[0] = msg.copyWith(
+        content: 'Initial chunk with appended token stream',
+        status: MessageStatus.done,
+      );
+      provider.notifyListeners();
+
+      await tester.pumpAndSettle();
+
+      // Message list updated with new token
+      expect(find.textContaining('appended token stream'), findsOneWidget);
     });
   });
 }

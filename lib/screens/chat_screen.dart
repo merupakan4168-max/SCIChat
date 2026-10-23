@@ -1,6 +1,7 @@
 // Main Chat Screen
 
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/rendering.dart';
 import 'dart:math' as math;
 import 'package:flutter_animate/flutter_animate.dart';
@@ -14,6 +15,7 @@ import 'package:file_picker/file_picker.dart';
 import '../widgets/chat_bubble.dart';
 import '../widgets/summary_skeleton.dart';
 import 'paper_detail_screen.dart';
+import 'pdf_viewer_screen.dart';
 
 import 'package:markdown/markdown.dart' as md;
 import 'package:flutter/services.dart';
@@ -23,6 +25,55 @@ import '../widgets/press_feedback.dart';
 import 'guide_screen.dart';
 import '../utils/follow_up_parser.dart';
 import '../utils/time_grouping.dart';
+
+// ── Phase 3B: Rebuild Scope Isolation ────────────────────────────────────────
+//
+// ChatScreen berhenti menggunakan `context.watch<SciChatProvider>()` secara
+// penuh. Sebagai gantinya, ia hanya mendengarkan perubahan yang benar-benar
+// mempengaruhi layout/scroll melalui Selector<SciChatProvider, _ChatScrollState>.
+//
+// Selama streaming, provider memanggil notifyListeners() setiap ~100ms.
+// Sebelum perubahan ini, setiap notifikasi menyebabkan seluruh ChatScreen
+// rebuild (AppBar, gradients, composer, semua ChatBubble lama).
+// Setelah perubahan ini, ChatScreen hanya rebuild saat sessionId, jumlah
+// pesan, status streaming (bool), atau jumlah follow-up berubah.
+//
+// _MessageListView adalah widget terpisah yang menggunakan context.watch
+// penuh agar pesan aktif (streaming) selalu mendapat konten terbaru.
+
+/// Snapshot nilai yang benar-benar membutuhkan rebuild ChatScreen.
+/// Digunakan oleh Selector untuk mencegah rebuild saat hanya konten
+/// token streaming yang berubah (frekuensi ~10x/detik).
+@immutable
+class _ChatScrollState {
+  final String sessionId;
+  final int messageCount;
+  final bool isStreaming;
+  final int lastFollowUpCount;
+  final bool hasMessages;
+
+  const _ChatScrollState({
+    required this.sessionId,
+    required this.messageCount,
+    required this.isStreaming,
+    required this.lastFollowUpCount,
+    required this.hasMessages,
+  });
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is _ChatScrollState &&
+          sessionId == other.sessionId &&
+          messageCount == other.messageCount &&
+          isStreaming == other.isStreaming &&
+          lastFollowUpCount == other.lastFollowUpCount &&
+          hasMessages == other.hasMessages;
+
+  @override
+  int get hashCode => Object.hash(
+      sessionId, messageCount, isStreaming, lastFollowUpCount, hasMessages);
+}
 
 class ChatScreen extends StatefulWidget {
   const ChatScreen({super.key});
@@ -37,8 +88,10 @@ class _ChatScreenState extends State<ChatScreen> {
   final _focusNode = FocusNode();
   bool _inputHasFocus = false;
   bool _userScrolledUp = false;
+  bool _isUserDragging = false;
+  bool _isAutoScrolling = false;
+  bool _hasScheduledAutoScroll = false;
   int _lastMessageCount = 0;
-  int _lastContentLength = 0;
   int _lastFollowUpCount = 0;
   String _lastSessionId = '';
 
@@ -54,11 +107,10 @@ class _ChatScreenState extends State<ChatScreen> {
     final h = box.size.height;
     if ((h - _composerHeight).abs() > 0.5) {
       setState(() => _composerHeight = h);
-      // Jaga posisi dasar agar pesan terakhir tetap terlihat di atas composer.
+      // Jaga posisi dasar agar pesan terakhir tetap terlihat di atas composer tanpa snap paksa
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted && !_userScrolledUp && _scrollController.hasClients) {
-          _scrollController
-              .jumpTo(_scrollController.position.maxScrollExtent);
+        if (mounted && !_userScrolledUp && !_isUserDragging && _scrollController.hasClients) {
+          _scrollToBottomIfNearBottom(threshold: 200.0);
         }
       });
     }
@@ -81,38 +133,98 @@ class _ChatScreenState extends State<ChatScreen> {
     super.dispose();
   }
 
-  void _scrollToBottom() {
+  void _scrollToBottom({Duration duration = const Duration(milliseconds: 250)}) {
     if (mounted && _userScrolledUp) {
       setState(() => _userScrolledUp = false);
     } else {
       _userScrolledUp = false;
     }
+    if (_hasScheduledAutoScroll) return;
+    _hasScheduledAutoScroll = true;
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scrollController.hasClients) {
-        _scrollController.animateTo(
-          _scrollController.position.maxScrollExtent,
-          duration: 300.ms,
-          curve: Curves.easeOut,
-        );
+      _hasScheduledAutoScroll = false;
+      if (!mounted || !_scrollController.hasClients) return;
+      final max = _scrollController.position.maxScrollExtent;
+      final current = _scrollController.position.pixels;
+      if ((max - current).abs() <= 0.5) return;
+
+      final disableAnimations =
+          MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+      if (disableAnimations) {
+        _scrollController.jumpTo(max);
+        return;
       }
+
+      _isAutoScrolling = true;
+      _scrollController
+          .animateTo(
+            max,
+            duration: duration,
+            curve: Curves.easeOut,
+          )
+          .whenComplete(() {
+            _isAutoScrolling = false;
+          });
     });
   }
 
   void _scrollToBottomIfNearBottom({double threshold = 160.0}) {
-    if (_userScrolledUp) return;
+    if (_userScrolledUp || _isUserDragging) return;
     if (!_scrollController.hasClients) return;
     final pos = _scrollController.position;
-    // Auto-scroll hanya jika pengguna berada dekat dasar dan tidak sedang menggulir ke atas
-    if ((pos.maxScrollExtent - pos.pixels) <= threshold) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (_scrollController.hasClients && !_userScrolledUp) {
-          final max = _scrollController.position.maxScrollExtent;
-          if (_scrollController.position.pixels < max) {
-            _scrollController.jumpTo(max);
-          }
-        }
-      });
-    }
+    if ((pos.maxScrollExtent - pos.pixels) > threshold) return;
+
+    if (_hasScheduledAutoScroll) return;
+    _hasScheduledAutoScroll = true;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _hasScheduledAutoScroll = false;
+      if (!mounted || _userScrolledUp || _isUserDragging || !_scrollController.hasClients) {
+        return;
+      }
+      final max = _scrollController.position.maxScrollExtent;
+      final current = _scrollController.position.pixels;
+      final delta = max - current;
+
+      if (delta <= 0.5) return;
+      if (delta > threshold) return;
+
+      final disableAnimations =
+          MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+      if (disableAnimations) {
+        _scrollController.jumpTo(max);
+        return;
+      }
+
+      // Jika animasi auto-scroll sedang meluncur, biarkan selesai dan evaluasi delta sisa
+      if (_isAutoScrolling) {
+        return;
+      }
+
+      final duration = delta <= 40
+          ? const Duration(milliseconds: 90)
+          : const Duration(milliseconds: 140);
+      final curve = delta <= 40 ? Curves.linear : Curves.easeOutQuad;
+
+      _isAutoScrolling = true;
+      _scrollController
+          .animateTo(max, duration: duration, curve: curve)
+          .whenComplete(() {
+            _isAutoScrolling = false;
+            if (mounted &&
+                !_userScrolledUp &&
+                !_isUserDragging &&
+                _scrollController.hasClients) {
+              final remaining =
+                  _scrollController.position.maxScrollExtent -
+                      _scrollController.position.pixels;
+              if (remaining > 1.0 && remaining <= threshold) {
+                _scrollToBottomIfNearBottom(threshold: threshold);
+              }
+            }
+          });
+    });
   }
 
   Future<void> _send() async {
@@ -150,259 +262,210 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final provider = context.watch<SciChatProvider>();
-    final messages = provider.messages;
-    final isStreaming =
-        messages.isNotEmpty && messages.last.status == MessageStatus.streaming;
-    final currentLastContentLength =
-        (isStreaming && messages.isNotEmpty) ? messages.last.content.length : 0;
-    final currentLastFollowUpCount =
-        messages.isNotEmpty ? messages.last.followUpSuggestions.length : 0;
+    // Phase 3B: Selector membatasi rebuild ChatScreen hanya pada perubahan
+    // yang benar-benar mempengaruhi layout/scroll/AppBar. Selama streaming,
+    // notifyListeners() dipanggil ~10x/detik, tapi Selector tidak akan
+    // memicu rebuild ChatScreen kecuali salah satu dari 5 nilai berubah.
+    // _MessageListView di bawah menggunakan context.watch mandiri sehingga
+    // pesan aktif tetap mendapat setiap update konten streaming.
+    return Selector<SciChatProvider, _ChatScrollState>(
+      selector: (_, p) {
+        final msgs = p.messages;
+        final streaming =
+            msgs.isNotEmpty && msgs.last.status == MessageStatus.streaming;
+        final followUpCount =
+            msgs.isNotEmpty ? msgs.last.followUpSuggestions.length : 0;
+        return _ChatScrollState(
+          sessionId: p.activeSessionId,
+          messageCount: msgs.length,
+          isStreaming: streaming,
+          lastFollowUpCount: followUpCount,
+          hasMessages: msgs.isNotEmpty,
+        );
+      },
+      shouldRebuild: (prev, next) => prev != next,
+      builder: (context, scrollState, _) {
+        // Baca provider non-reactive untuk data yang hanya dipakai di callback
+        // atau AppBar (tidak mempengaruhi kapan ChatScreen rebuild).
+        final provider = context.read<SciChatProvider>();
 
-    // Auto-scroll on new messages, session change, streaming text expansion, or follow-up cards arrival
-    if (provider.activeSessionId != _lastSessionId) {
-      _lastSessionId = provider.activeSessionId;
-      _lastMessageCount = messages.length;
-      _lastContentLength = currentLastContentLength;
-      _lastFollowUpCount = currentLastFollowUpCount;
-      if (messages.isNotEmpty) _scrollToBottom();
-    } else if (messages.length > _lastMessageCount) {
-      _lastMessageCount = messages.length;
-      _lastContentLength = currentLastContentLength;
-      _lastFollowUpCount = currentLastFollowUpCount;
-      _scrollToBottom();
-    } else if (messages.length < _lastMessageCount) {
-      _lastMessageCount = messages.length;
-      _lastContentLength = currentLastContentLength;
-      _lastFollowUpCount = currentLastFollowUpCount;
-    } else if (isStreaming && currentLastContentLength != _lastContentLength) {
-      _lastContentLength = currentLastContentLength;
-      _scrollToBottomIfNearBottom();
-    } else if (currentLastFollowUpCount != _lastFollowUpCount) {
-      _lastFollowUpCount = currentLastFollowUpCount;
-      if (currentLastFollowUpCount > 0 && !_userScrolledUp) {
-        _scrollToBottom();
-      }
-    }
+        // ── Auto-scroll logic ────────────────────────────────────────────────
+        // Dipicu berdasarkan perubahan _ChatScrollState yang sudah terfilter.
+        if (scrollState.sessionId != _lastSessionId) {
+          _lastSessionId = scrollState.sessionId;
+          _lastMessageCount = scrollState.messageCount;
+          _lastFollowUpCount = scrollState.lastFollowUpCount;
+          if (scrollState.hasMessages) _scrollToBottom();
+        } else if (scrollState.messageCount > _lastMessageCount) {
+          _lastMessageCount = scrollState.messageCount;
+          _lastFollowUpCount = scrollState.lastFollowUpCount;
+          _scrollToBottom();
+        } else if (scrollState.messageCount < _lastMessageCount) {
+          _lastMessageCount = scrollState.messageCount;
+          _lastFollowUpCount = scrollState.lastFollowUpCount;
+        } else if (scrollState.lastFollowUpCount != _lastFollowUpCount) {
+          _lastFollowUpCount = scrollState.lastFollowUpCount;
+          if (scrollState.lastFollowUpCount > 0 && !_userScrolledUp) {
+            _scrollToBottom();
+          }
+        }
+        // Catatan: Auto-scroll saat streaming konten tumbuh ditangani di
+        // _MessageListView._onScrollNotification agar tidak membutuhkan
+        // rebuild ChatScreen. Lihat _MessageListView di bawah.
 
-    return Scaffold(
-      backgroundColor: context.colors.surface0,
-      appBar: _buildAppBar(context, provider),
-      body: Stack(
-        children: [
-          Column(
+        return Scaffold(
+          backgroundColor: context.colors.surface0,
+          appBar: _buildAppBar(context, provider),
+          body: Stack(
             children: [
-              // Messages list (runs to the bottom edge, scrolls behind the composer)
-              Expanded(
-                child: messages.isEmpty
-                    ? _EmptyState(onSuggestionTap: (s) {
-                        _controller.text = s;
-                        _send();
-                      })
-                    : NotificationListener<ScrollNotification>(
-                        onNotification: (notification) {
-                          if (notification is UserScrollNotification) {
-                            if (notification.direction ==
-                                ScrollDirection.forward) {
-                              // Pengguna menggulir ke atas
-                              if (!_userScrolledUp) {
-                                setState(() => _userScrolledUp = true);
+              Column(
+                children: [
+                  // Messages list — menggunakan _MessageListView yang mem-watch
+                  // provider secara mandiri untuk mendapat pesan terbaru.
+                  Expanded(
+                    child: !scrollState.hasMessages
+                        ? _EmptyState(onSuggestionTap: (s) {
+                            _controller.text = s;
+                            _send();
+                          })
+                        : _MessageListView(
+                            scrollController: _scrollController,
+                            composerHeight: _composerHeight,
+                            userScrolledUp: _userScrolledUp,
+                            onUserScrolledUpChanged: (v) {
+                              if (_userScrolledUp != v) {
+                                setState(() => _userScrolledUp = v);
                               }
-                            }
-                          } else if (notification is ScrollUpdateNotification) {
-                            if (_scrollController.hasClients) {
-                              final pos = _scrollController.position;
-                              final distFromBottom =
-                                  pos.maxScrollExtent - pos.pixels;
-                              if (distFromBottom <= 60.0) {
-                                // Pengguna kembali ke dekat dasar
-                                if (_userScrolledUp) {
-                                  setState(() => _userScrolledUp = false);
-                                }
-                              } else if (distFromBottom > 160.0 &&
-                                  notification.dragDetails != null) {
-                                // Pengguna menyeret layar menjauh dari dasar
-                                if (!_userScrolledUp) {
-                                  setState(() => _userScrolledUp = true);
-                                }
-                              }
-                            }
-                          }
-                          return false;
-                        },
-                        child: ListView.builder(
-                          controller: _scrollController,
-                          padding: EdgeInsets.fromLTRB(
-                              16, 12, 16, _composerHeight + 16),
-                          itemCount: messages.length,
-                          itemBuilder: (ctx, i) {
-                            final msg = messages[i];
-                            final isLastAssistant =
-                                (i == messages.length - 1) && msg.isAssistant;
-                            return ChatBubble(
-                              message: msg,
-                              isFavorite: (id) => provider.isFavorite(id),
-                              onFavoriteToggle: (p) =>
-                                  provider.toggleFavorite(p),
-                              onPaperTap: _openPaper,
-                              onSummarize: _summarizePaper,
-                              onChatPdf: (p) => provider.setActivePaper(p),
-                              onFollowUpTap: (suggestion) {
-                                _controller.text = suggestion;
-                                _send();
-                              },
-                              onRetry: msg.status == MessageStatus.error &&
-                                      msg.content.isEmpty
-                                  ? () => provider.retryMessage(msg.id)
-                                  : null,
-                              onContinue: ((msg.isTruncated &&
-                                          msg.finishReason != 'cancelled') ||
-                                      (msg.status == MessageStatus.error &&
-                                          msg.content.isNotEmpty))
-                                  ? () => provider.continueMessage(msg.id)
-                                  : null,
-                              onDismissError: msg.status == MessageStatus.error
-                                  ? () => provider.dismissError(msg.id)
-                                  : null,
-                              onRegenerate: isLastAssistant &&
-                                      !provider.isLoading &&
-                                      provider.apiKeySet
-                                  ? () => provider.regenerateLastResponse(
-                                        assistantMessageId: msg.id,
-                                      )
-                                  : null,
-                              onBranch: (!provider.isLoading &&
-                                      msg.isAssistant &&
-                                      (msg.status == MessageStatus.done ||
-                                          (msg.status == MessageStatus.error &&
-                                              msg.content.trim().isNotEmpty)))
-                                  ? () async {
-                                      final messenger =
-                                          ScaffoldMessenger.of(context);
-                                      final accentColor = context.colors.accent;
-                                      final success = await provider
-                                          .branchSessionFromMessage(msg.id);
-                                      if (!context.mounted) return;
-                                      if (success) {
-                                        _scrollToBottom();
-                                        messenger.showSnackBar(
-                                          SnackBar(
-                                            content: const Text(
-                                                'Berhasil mencabangkan ke obrolan baru.'),
-                                            backgroundColor: accentColor,
-                                            behavior: SnackBarBehavior.floating,
-                                            duration:
-                                                const Duration(seconds: 2),
-                                          ),
-                                        );
-                                      } else {
-                                        messenger.showSnackBar(
-                                          const SnackBar(
-                                            content: Text(
-                                                'Gagal mencabangkan obrolan.'),
-                                            backgroundColor: Colors.red,
-                                            behavior: SnackBarBehavior.floating,
-                                            duration: Duration(seconds: 2),
-                                          ),
-                                        );
-                                      }
-                                    }
-                                  : null,
-                            );
-                          },
-                        ),
+                            },
+                            onIsUserDraggingChanged: (v) =>
+                                _isUserDragging = v,
+                            isAutoScrolling: () => _isAutoScrolling,
+                            scrollToBottomIfNearBottom:
+                                _scrollToBottomIfNearBottom,
+                            openPaper: _openPaper,
+                            summarizePaper: _summarizePaper,
+                            sendFollowUp: (s) {
+                              _controller.text = s;
+                              _send();
+                            },
+                          ),
+                  ),
+                ],
+              ),
+
+              // ── Top Fade Gradient ─────────────────────────────────────────
+              // Gradasi transparan ke warna background halaman di bawah AppBar
+              Positioned(
+                left: 0,
+                right: 0,
+                top: 0,
+                height: 28,
+                child: IgnorePointer(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.bottomCenter,
+                        end: Alignment.topCenter,
+                        stops: const [0.0, 0.45, 1.0],
+                        colors: [
+                          context.colors.surface0.withValues(alpha: 0.0),
+                          context.colors.surface0.withValues(alpha: 0.70),
+                          context.colors.surface0,
+                        ],
                       ),
+                    ),
+                  ),
+                ),
+              ),
+
+              // ── Bottom Fade Gradient ──────────────────────────────────────
+              // Gradasi transparan ke warna background halaman di belakang composer
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: 0,
+                height: 96,
+                child: IgnorePointer(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        stops: const [0.0, 0.50, 1.0],
+                        colors: [
+                          context.colors.surface0.withValues(alpha: 0.0),
+                          context.colors.surface0.withValues(alpha: 0.65),
+                          context.colors.surface0,
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+
+              // Input area: floating card, no background band
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: 0,
+                child: NotificationListener<SizeChangedLayoutNotification>(
+                  onNotification: (_) {
+                    WidgetsBinding.instance
+                        .addPostFrameCallback((_) => _measureComposer());
+                    return false;
+                  },
+                  child: SizeChangedLayoutNotifier(
+                    child: KeyedSubtree(
+                      key: _composerKey,
+                      child: Selector<SciChatProvider, _InputAreaData>(
+                        selector: (_, p) => _InputAreaData(
+                          isLoading: p.isLoading,
+                          apiKeySet: p.apiKeySet,
+                          activeSkill: p.activeSkill,
+                          activeContexts:
+                              List<ArxivPaper>.unmodifiable(p.activeContexts),
+                          contextEvidence: Map<String, PaperEvidence>.unmodifiable(
+                              p.contextEvidence),
+                          pendingAttachment: p.pendingAttachment,
+                          deepSearch: p.deepSearch,
+                          eli5Mode: p.eli5Mode,
+                        ),
+                        builder: (context, inputData, _) {
+                          final prov = context.read<SciChatProvider>();
+                          return RepaintBoundary(
+                            child: _InputArea(
+                              controller: _controller,
+                              focusNode: _focusNode,
+                              hasFocus: _inputHasFocus,
+                              isLoading: inputData.isLoading,
+                              apiKeySet: inputData.apiKeySet,
+                              activeSkill: inputData.activeSkill,
+                              onSend: _send,
+                              activeContexts: inputData.activeContexts,
+                              contextEvidence: inputData.contextEvidence,
+                              pendingAttachment: inputData.pendingAttachment,
+                              deepSearch: inputData.deepSearch,
+                              eli5Mode: inputData.eli5Mode,
+                              onRemoveContext: (id) =>
+                                  prov.removeActiveContext(id),
+                              onCancelAttachment: () =>
+                                  prov.setPendingAttachment(null),
+                              scrollToBottomButton:
+                                  (_userScrolledUp && scrollState.hasMessages)
+                                      ? _buildScrollToBottomButton(context)
+                                      : null,
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ),
+                ),
               ),
             ],
           ),
-
-          // ── Top Fade Gradient ─────────────────────────────────────────────
-          // Gradasi transparan ke warna background halaman di bawah AppBar
-          Positioned(
-            left: 0,
-            right: 0,
-            top: 0,
-            height: 28,
-            child: IgnorePointer(
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.bottomCenter,
-                    end: Alignment.topCenter,
-                    stops: const [0.0, 0.45, 1.0],
-                    colors: [
-                      context.colors.surface0.withValues(alpha: 0.0),
-                      context.colors.surface0.withValues(alpha: 0.70),
-                      context.colors.surface0,
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          ),
-
-          // ── Bottom Fade Gradient ──────────────────────────────────────────
-          // Gradasi transparan ke warna background halaman di belakang composer
-          Positioned(
-            left: 0,
-            right: 0,
-            bottom: 0,
-            height: 160,
-            child: IgnorePointer(
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    stops: const [0.0, 0.45, 1.0],
-                    colors: [
-                      context.colors.surface0.withValues(alpha: 0.0),
-                      context.colors.surface0.withValues(alpha: 0.70),
-                      context.colors.surface0,
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          ),
-
-          // Input area: floating card, no background band
-          Positioned(
-            left: 0,
-            right: 0,
-            bottom: 0,
-            child: NotificationListener<SizeChangedLayoutNotification>(
-              onNotification: (_) {
-                WidgetsBinding.instance
-                    .addPostFrameCallback((_) => _measureComposer());
-                return false;
-              },
-              child: SizeChangedLayoutNotifier(
-                child: KeyedSubtree(
-                  key: _composerKey,
-                  child: _InputArea(
-                    controller: _controller,
-                    focusNode: _focusNode,
-                    hasFocus: _inputHasFocus,
-                    isLoading: provider.isLoading,
-                    apiKeySet: provider.apiKeySet,
-                    onSend: _send,
-                    activeContexts: provider.activeContexts,
-                    contextEvidence: provider.contextEvidence,
-                    pendingAttachment: provider.pendingAttachment,
-                    onRemoveContext: (id) => provider.removeActiveContext(id),
-                    onCancelAttachment: () => provider.setPendingAttachment(null),
-                    scrollToBottomButton:
-                        (_userScrolledUp && messages.isNotEmpty)
-                            ? _buildScrollToBottomButton(context)
-                            : null,
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
+        );
+      },
     );
   }
 
@@ -592,6 +655,240 @@ class _ChatScreenState extends State<ChatScreen> {
       }
     }
     return buffer.toString();
+  }
+}
+
+// ── _InputAreaData ────────────────────────────────────────────────────────────
+// Snapshot data yang diperlukan oleh _InputArea, digunakan bersama Selector
+// agar composer hanya rebuild saat state-nya benar-benar berubah.
+// Menggunakan snapshot immutable (List/Map unmodifiable) dan deep equality
+// (listEquals/mapEquals) agar mutasi in-place pada provider terdeteksi secara andal.
+@immutable
+class _InputAreaData {
+  final bool isLoading;
+  final bool apiKeySet;
+  final AiSkill activeSkill;
+  final List<ArxivPaper> activeContexts;
+  final Map<String, PaperEvidence> contextEvidence;
+  final ArxivPaper? pendingAttachment;
+  final bool deepSearch;
+  final bool eli5Mode;
+
+  const _InputAreaData({
+    required this.isLoading,
+    required this.apiKeySet,
+    required this.activeSkill,
+    required this.activeContexts,
+    required this.contextEvidence,
+    required this.pendingAttachment,
+    required this.deepSearch,
+    required this.eli5Mode,
+  });
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is _InputAreaData &&
+          isLoading == other.isLoading &&
+          apiKeySet == other.apiKeySet &&
+          activeSkill == other.activeSkill &&
+          pendingAttachment == other.pendingAttachment &&
+          deepSearch == other.deepSearch &&
+          eli5Mode == other.eli5Mode &&
+          listEquals(activeContexts, other.activeContexts) &&
+          mapEquals(contextEvidence, other.contextEvidence);
+
+  @override
+  int get hashCode => Object.hash(
+        isLoading,
+        apiKeySet,
+        activeSkill,
+        pendingAttachment,
+        deepSearch,
+        eli5Mode,
+        Object.hashAll(activeContexts),
+        Object.hashAll(contextEvidence.keys),
+        Object.hashAll(contextEvidence.values),
+      );
+}
+
+// ── _MessageListView ──────────────────────────────────────────────────────────
+//
+// Widget terpisah yang mem-watch SciChatProvider secara penuh untuk mendapatkan
+// daftar pesan terbaru pada setiap notify (termasuk setiap 100ms streaming).
+// Dengan memisahkannya dari _ChatScreenState, parent ChatScreen tidak perlu
+// rebuild AppBar + gradients + composer saat hanya konten token berubah.
+//
+// Auto-scroll saat streaming konten tumbuh ditangani di sini agar tidak
+// membutuhkan rebuild ChatScreen.
+class _MessageListView extends StatelessWidget {
+  final ScrollController scrollController;
+  final double composerHeight;
+  final bool userScrolledUp;
+  final ValueChanged<bool> onUserScrolledUpChanged;
+  final ValueChanged<bool> onIsUserDraggingChanged;
+  final bool Function() isAutoScrolling;
+  final void Function({double threshold}) scrollToBottomIfNearBottom;
+  final void Function(ArxivPaper) openPaper;
+  final Future<void> Function(ArxivPaper) summarizePaper;
+  final void Function(String) sendFollowUp;
+
+  const _MessageListView({
+    required this.scrollController,
+    required this.composerHeight,
+    required this.userScrolledUp,
+    required this.onUserScrolledUpChanged,
+    required this.onIsUserDraggingChanged,
+    required this.isAutoScrolling,
+    required this.scrollToBottomIfNearBottom,
+    required this.openPaper,
+    required this.summarizePaper,
+    required this.sendFollowUp,
+  });
+
+  bool _onScrollNotification(
+    ScrollNotification notification,
+    SciChatProvider provider,
+    List<ChatMessage> messages,
+  ) {
+    if (notification is ScrollStartNotification) {
+      if (notification.dragDetails != null) {
+        onIsUserDraggingChanged(true);
+      }
+    } else if (notification is UserScrollNotification) {
+      if (notification.direction == ScrollDirection.forward) {
+        // Pengguna menggulir ke atas (menjauh dari dasar)
+        onIsUserDraggingChanged(true);
+        if (!userScrolledUp) onUserScrolledUpChanged(true);
+      } else if (notification.direction == ScrollDirection.reverse) {
+        // Pengguna menggulir ke bawah
+        onIsUserDraggingChanged(true);
+      } else if (notification.direction == ScrollDirection.idle) {
+        onIsUserDraggingChanged(false);
+      }
+    } else if (notification is ScrollUpdateNotification) {
+      if (notification.dragDetails != null) {
+        onIsUserDraggingChanged(true);
+        // Jika pengguna melakukan drag ke atas, segera kunci auto-scroll
+        if (notification.scrollDelta != null &&
+            notification.scrollDelta! < -1.0) {
+          if (!userScrolledUp) onUserScrolledUpChanged(true);
+        }
+      }
+      if (scrollController.hasClients) {
+        final pos = scrollController.position;
+        final distFromBottom = pos.maxScrollExtent - pos.pixels;
+        if (distFromBottom <= 30.0) {
+          if (userScrolledUp) onUserScrolledUpChanged(false);
+        }
+      }
+    } else if (notification is ScrollEndNotification) {
+      onIsUserDraggingChanged(false);
+      if (scrollController.hasClients) {
+        final pos = scrollController.position;
+        final distFromBottom = pos.maxScrollExtent - pos.pixels;
+        if (distFromBottom <= 30.0) {
+          if (userScrolledUp) onUserScrolledUpChanged(false);
+        }
+      }
+    }
+    return false;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // watch penuh: _MessageListView rebuild setiap provider notify sehingga
+    // konten streaming aktif selalu up-to-date.
+    final provider = context.watch<SciChatProvider>();
+    final messages = provider.messages;
+    final isStreamingNow =
+        messages.isNotEmpty && messages.last.status == MessageStatus.streaming;
+
+    // Auto-scroll saat konten streaming tumbuh — tanpa menyebabkan
+    // ChatScreen rebuild karena ini ada di dalam _MessageListView.
+    if (isStreamingNow && !userScrolledUp) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (scrollController.hasClients) {
+          scrollToBottomIfNearBottom();
+        }
+      });
+    }
+
+    return NotificationListener<ScrollNotification>(
+      onNotification: (n) => _onScrollNotification(n, provider, messages),
+      child: ListView.builder(
+        controller: scrollController,
+        padding: EdgeInsets.fromLTRB(16, 12, 16, composerHeight + 16),
+        itemCount: messages.length,
+        itemBuilder: (ctx, i) {
+          final msg = messages[i];
+          final isLastAssistant =
+              (i == messages.length - 1) && msg.isAssistant;
+          return ChatBubble(
+            key: ValueKey('msg_${msg.id}'),
+            message: msg,
+            isFavorite: (id) => provider.isFavorite(id),
+            onFavoriteToggle: (p) => provider.toggleFavorite(p),
+            onPaperTap: openPaper,
+            onSummarize: summarizePaper,
+            onChatPdf: (p) => provider.setActivePaper(p),
+            onFollowUpTap: sendFollowUp,
+            onRetry: msg.status == MessageStatus.error && msg.content.isEmpty
+                ? () => provider.retryMessage(msg.id)
+                : null,
+            onContinue: ((msg.isTruncated &&
+                        msg.finishReason != 'cancelled') ||
+                    (msg.status == MessageStatus.error &&
+                        msg.content.isNotEmpty))
+                ? () => provider.continueMessage(msg.id)
+                : null,
+            onDismissError: msg.status == MessageStatus.error
+                ? () => provider.dismissError(msg.id)
+                : null,
+            onRegenerate: isLastAssistant &&
+                    !provider.isLoading &&
+                    provider.apiKeySet
+                ? () => provider.regenerateLastResponse(
+                      assistantMessageId: msg.id,
+                    )
+                : null,
+            onBranch: (!provider.isLoading &&
+                    msg.isAssistant &&
+                    (msg.status == MessageStatus.done ||
+                        (msg.status == MessageStatus.error &&
+                            msg.content.trim().isNotEmpty)))
+                ? () async {
+                    final messenger = ScaffoldMessenger.of(context);
+                    final accentColor = context.colors.accent;
+                    final success =
+                        await provider.branchSessionFromMessage(msg.id);
+                    if (!context.mounted) return;
+                    if (success) {
+                      messenger.showSnackBar(
+                        SnackBar(
+                          content: const Text(
+                              'Berhasil mencabangkan ke obrolan baru.'),
+                          backgroundColor: accentColor,
+                          behavior: SnackBarBehavior.floating,
+                          duration: const Duration(seconds: 2),
+                        ),
+                      );
+                    } else {
+                      messenger.showSnackBar(
+                        const SnackBar(
+                          content: Text('Gagal mencabangkan obrolan.'),
+                          backgroundColor: Colors.red,
+                          behavior: SnackBarBehavior.floating,
+                          duration: Duration(seconds: 2),
+                        ),
+                      );
+                    }
+                  }
+                : null,
+          );
+        },
+      ),
+    );
   }
 }
 
@@ -933,6 +1230,9 @@ class _InputArea extends StatefulWidget {
   final List<ArxivPaper> activeContexts;
   final Map<String, PaperEvidence> contextEvidence;
   final ArxivPaper? pendingAttachment;
+  final AiSkill activeSkill;
+  final bool deepSearch;
+  final bool eli5Mode;
   final Function(String) onRemoveContext;
   final VoidCallback? onCancelAttachment;
   final Widget? scrollToBottomButton;
@@ -947,6 +1247,9 @@ class _InputArea extends StatefulWidget {
     this.activeContexts = const [],
     this.contextEvidence = const {},
     this.pendingAttachment,
+    this.activeSkill = AiSkill.none,
+    this.deepSearch = false,
+    this.eli5Mode = false,
     required this.onRemoveContext,
     this.onCancelAttachment,
     this.scrollToBottomButton,
@@ -959,17 +1262,20 @@ class _InputArea extends StatefulWidget {
 class _InputAreaState extends State<_InputArea> {
   bool _hasText = false;
   bool _showSkillMenu = false;
+  bool _showToolsMenu = false;
 
   @override
   void initState() {
     super.initState();
     widget.controller.addListener(_onTextChanged);
+    widget.focusNode.addListener(_onFocusChanged);
     _hasText = widget.controller.text.isNotEmpty;
   }
 
   @override
   void dispose() {
     widget.controller.removeListener(_onTextChanged);
+    widget.focusNode.removeListener(_onFocusChanged);
     super.dispose();
   }
 
@@ -981,6 +1287,16 @@ class _InputAreaState extends State<_InputArea> {
       widget.controller.addListener(_onTextChanged);
       _hasText = widget.controller.text.isNotEmpty;
     }
+    if (oldWidget.focusNode != widget.focusNode) {
+      oldWidget.focusNode.removeListener(_onFocusChanged);
+      widget.focusNode.addListener(_onFocusChanged);
+    }
+  }
+
+  void _onFocusChanged() {
+    if (widget.focusNode.hasFocus && _showToolsMenu) {
+      setState(() => _showToolsMenu = false);
+    }
   }
 
   void _onTextChanged() {
@@ -990,6 +1306,7 @@ class _InputAreaState extends State<_InputArea> {
 
     final showMenu = text.startsWith('/');
     if (_showSkillMenu != showMenu) setState(() => _showSkillMenu = showMenu);
+    if (showMenu && _showToolsMenu) setState(() => _showToolsMenu = false);
   }
 
   Future<void> _pickPdfFile() async {
@@ -1003,12 +1320,12 @@ class _InputAreaState extends State<_InputArea> {
         final path = picked.path!;
         final name = picked.name;
 
-        // Create a mock ArxivPaper for local PDF
+        // Create an ArxivPaper representation for local PDF
         final mockPaper = ArxivPaper(
           id: 'local_${DateTime.now().millisecondsSinceEpoch}',
           title: name,
           authors: const ['Local File'],
-          summary: 'A local PDF file uploaded by user.',
+          summary: '',
           published: DateTime.now().toIso8601String(),
           updated: DateTime.now().toIso8601String(),
           categories: const ['Local'],
@@ -1026,7 +1343,6 @@ class _InputAreaState extends State<_InputArea> {
   }
 
   Widget _buildSkillMenu(BuildContext context) {
-    final provider = context.watch<SciChatProvider>();
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       decoration: BoxDecoration(
@@ -1048,7 +1364,7 @@ class _InputAreaState extends State<_InputArea> {
               scaleFactor: 0.98,
               child: InkWell(
                 onTap: () {
-                  provider.setActiveSkill(skill);
+                  context.read<SciChatProvider>().setActiveSkill(skill);
                   widget.controller.clear();
                   setState(() => _showSkillMenu = false);
                 },
@@ -1090,7 +1406,7 @@ class _InputAreaState extends State<_InputArea> {
 
   Widget _buildSkillChip(BuildContext context) {
     final c = context.colors;
-    final skill = context.watch<SciChatProvider>().activeSkill;
+    final skill = widget.activeSkill;
     if (skill == AiSkill.none) return const SizedBox.shrink();
 
     return Container(
@@ -1130,107 +1446,348 @@ class _InputAreaState extends State<_InputArea> {
     );
   }
 
-  Widget _buildAddMenu(BuildContext context) {
+  Widget _buildToolsMenuButton(BuildContext context) {
+    final c = context.colors;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final isActive = _showToolsMenu ||
+        widget.deepSearch ||
+        widget.eli5Mode ||
+        widget.activeSkill != AiSkill.none;
+
+    return Semantics(
+      label: 'Menu Mode & Alat Riset AI',
+      button: true,
+      child: Tooltip(
+        message: 'Mode & Alat Riset AI',
+        child: SizedBox(
+          width: 36,
+          height: 36,
+          child: PressFeedback(
+            scaleFactor: 0.92,
+            child: InkWell(
+              key: const Key('toolsMenuButton'),
+              onTap: () {
+                if (!_showToolsMenu) {
+                  widget.focusNode.unfocus();
+                }
+                setState(() => _showToolsMenu = !_showToolsMenu);
+              },
+              borderRadius: BorderRadius.circular(10),
+              child: Container(
+                decoration: BoxDecoration(
+                  color: _showToolsMenu
+                      ? c.accent.withValues(alpha: 0.12)
+                      : (isActive
+                          ? c.accent.withValues(alpha: 0.08)
+                          : (isDark ? c.surface2 : c.surface1)),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                    color: _showToolsMenu
+                        ? c.accent
+                        : (isActive
+                            ? c.accent.withValues(alpha: 0.35)
+                            : c.borderSubtle),
+                    width: 1,
+                  ),
+                ),
+                child: Center(
+                  child: Icon(
+                    Icons.tune_rounded,
+                    size: 18,
+                    color: _showToolsMenu || isActive ? c.accent : c.textSecondary,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildToolsMenu(BuildContext context) {
+    final c = context.colors;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     final provider = context.watch<SciChatProvider>();
-    return SizedBox(
-      height: 36,
-      width: 36,
-      child: PressFeedback(
-          scaleFactor: 0.92,
-          child: PopupMenuButton<String>(
-            padding: EdgeInsets.zero,
-            icon:
-                Icon(Icons.add, size: 22, color: context.colors.textSecondary),
-            tooltip: 'Menu Tambahan',
-            color: context.colors.surface1,
-            shape:
-                RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            onSelected: (value) {
-              if (value == 'deep') {
-                provider.toggleDeepSearch();
-              } else if (value == 'eli5') {
-                provider.toggleEli5Mode();
-              } else if (value.startsWith('skill_')) {
-                final skillName = value.substring(6);
-                final skill =
-                    AiSkill.values.firstWhere((s) => s.name == skillName);
-                provider.setActiveSkill(skill);
-              }
-            },
-            itemBuilder: (BuildContext context) {
-              return [
-                PopupMenuItem(
-                  value: 'deep',
-                  child: Row(
-                    children: [
-                      Icon(Icons.travel_explore,
-                          size: 18,
-                          color: provider.deepSearch
-                              ? context.colors.accent
-                              : context.colors.textPrimary),
-                      const SizedBox(width: 12),
-                      Text('Deep Search', style: context.typography.bodyMedium),
-                      const Spacer(),
-                      if (provider.deepSearch)
-                        Icon(Icons.check,
-                            size: 18, color: context.colors.accent),
-                    ],
-                  ),
+
+    return Container(
+      key: const Key('toolsMenuPanel'),
+      margin: const EdgeInsets.only(bottom: 8),
+      decoration: BoxDecoration(
+        color: isDark ? c.surface1 : Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: isDark ? c.borderSubtle : const Color(0xFFDCDCE2),
+          width: 1,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: isDark ? 0.35 : 0.08),
+            blurRadius: 16,
+            offset: const Offset(0, 4),
+          ),
+          BoxShadow(
+            color: Colors.black.withValues(alpha: isDark ? 0.15 : 0.03),
+            blurRadius: 4,
+            offset: const Offset(0, 1),
+          ),
+        ],
+      ),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxHeight: 280),
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // Header
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                child: Row(
+                  children: [
+                    Icon(Icons.tune_rounded, size: 16, color: c.accent),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Mode Riset & Alat AI',
+                      style: context.typography.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w600,
+                        color: c.textPrimary,
+                      ),
+                    ),
+                    const Spacer(),
+                    PressFeedback(
+                      scaleFactor: 0.9,
+                      child: InkWell(
+                        key: const Key('toolsMenuCloseButton'),
+                        onTap: () => setState(() => _showToolsMenu = false),
+                        borderRadius: BorderRadius.circular(8),
+                        child: Padding(
+                          padding: const EdgeInsets.all(4),
+                          child: Icon(Icons.close, size: 18, color: c.textMuted),
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
-                PopupMenuItem(
-                  value: 'eli5',
-                  child: Row(
-                    children: [
-                      Icon(Icons.child_care,
-                          size: 18,
-                          color: provider.eli5Mode
-                              ? context.colors.accent
-                              : context.colors.textPrimary),
-                      const SizedBox(width: 12),
-                      Text('ELI5 Mode', style: context.typography.bodyMedium),
-                      const Spacer(),
-                      if (provider.eli5Mode)
-                        Icon(Icons.check,
-                            size: 18, color: context.colors.accent),
-                    ],
-                  ),
+              ),
+              const SizedBox(height: 4),
+              Divider(height: 1, color: c.borderSubtle),
+
+              // Mode Toggles: Deep Search
+              _buildToolsMenuItem(
+                context: context,
+                key: const Key('toolDeepSearchItem'),
+                icon: Icons.travel_explore,
+                title: 'Deep Search',
+                subtitle: 'Pencarian multi-sumber lebih dalam',
+                isActive: provider.deepSearch,
+                onTap: () {
+                  provider.toggleDeepSearch();
+                },
+              ),
+
+              // Mode Toggles: ELI5 Mode
+              _buildToolsMenuItem(
+                context: context,
+                key: const Key('toolEli5Item'),
+                icon: Icons.child_care,
+                title: 'ELI5 Mode',
+                subtitle: 'Penjelasan konsep ilmiah ramah pemula',
+                isActive: provider.eli5Mode,
+                onTap: () {
+                  provider.toggleEli5Mode();
+                },
+              ),
+
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                child: Row(
+                  children: [
+                    Text(
+                      'KEAHLIAN KHUSUS (AI SKILL)',
+                      style: context.typography.labelSmall?.copyWith(
+                        color: c.textMuted,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: 0.8,
+                      ),
+                    ),
+                  ],
                 ),
-                const PopupMenuDivider(),
-                ...AiSkill.values
-                    .where((s) => s != AiSkill.none)
-                    .map((skill) => PopupMenuItem(
-                          value: 'skill_${skill.name}',
-                          child: Row(
-                            children: [
-                              Icon(skill.icon,
-                                  size: 18,
-                                  color: provider.activeSkill == skill
-                                      ? context.colors.accent
-                                      : context.colors.textPrimary),
-                              const SizedBox(width: 12),
-                              Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Text(skill.displayName,
-                                      style: context.typography.bodyMedium),
-                                  Text(skill.command,
-                                      style: context.typography.labelSmall
-                                          ?.copyWith(
-                                              color: context.colors.textMuted,
-                                              fontSize: 10)),
-                                ],
-                              ),
-                              const Spacer(),
-                              if (provider.activeSkill == skill)
-                                Icon(Icons.check,
-                                    size: 18, color: context.colors.accent),
-                            ],
-                          ),
-                        )),
-              ];
-            },
-          )),
+              ),
+
+              // AI Skills list
+              ...AiSkill.values
+                  .where((s) => s != AiSkill.none)
+                  .map((skill) => _buildToolsMenuItem(
+                        context: context,
+                        key: Key('toolSkill_${skill.name}'),
+                        icon: skill.icon,
+                        title: skill.displayName,
+                        subtitle: skill.command,
+                        isActive: provider.activeSkill == skill,
+                        onTap: () {
+                          if (provider.activeSkill == skill) {
+                            provider.setActiveSkill(AiSkill.none);
+                          } else {
+                            provider.setActiveSkill(skill);
+                          }
+                          setState(() => _showToolsMenu = false);
+                        },
+                      )),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildToolsMenuItem({
+    required BuildContext context,
+    required Key key,
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required bool isActive,
+    required VoidCallback onTap,
+  }) {
+    final c = context.colors;
+    return PressFeedback(
+      scaleFactor: 0.98,
+      child: InkWell(
+        key: key,
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          child: Row(
+            children: [
+              Container(
+                width: 32,
+                height: 32,
+                decoration: BoxDecoration(
+                  color: isActive ? c.accent.withValues(alpha: 0.12) : c.surface2,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Icon(
+                  icon,
+                  size: 18,
+                  color: isActive ? c.accent : c.textSecondary,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      title,
+                      style: context.typography.bodyMedium?.copyWith(
+                        fontWeight: isActive ? FontWeight.w600 : FontWeight.w500,
+                        color: isActive ? c.accent : c.textPrimary,
+                      ),
+                    ),
+                    Text(
+                      subtitle,
+                      style: context.typography.labelSmall?.copyWith(
+                        color: c.textMuted,
+                        fontSize: 11,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (isActive)
+                Icon(Icons.check_circle_rounded, size: 18, color: c.accent)
+              else
+                Icon(Icons.circle_outlined, size: 18, color: c.borderMedium),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDeepSearchChip(BuildContext context) {
+    final c = context.colors;
+    return Container(
+      key: const Key('deepSearchChip'),
+      constraints: const BoxConstraints(minHeight: 36),
+      padding: const EdgeInsets.only(left: 10, right: 2),
+      decoration: BoxDecoration(
+        color: c.accent.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: c.accent.withValues(alpha: 0.25), width: 1),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.travel_explore, size: 14, color: c.accent),
+          const SizedBox(width: 6),
+          Text(
+            'Deep Search',
+            style: context.typography.labelMedium?.copyWith(
+              color: c.textPrimary,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          PressFeedback(
+            scaleFactor: 0.9,
+            child: InkWell(
+              key: const Key('deepSearchChipClose'),
+              onTap: () => context.read<SciChatProvider>().toggleDeepSearch(),
+              borderRadius: BorderRadius.circular(10),
+              child: SizedBox(
+                width: 32,
+                height: 32,
+                child: Icon(Icons.close, size: 16, color: c.textMuted),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildEli5Chip(BuildContext context) {
+    final c = context.colors;
+    return Container(
+      key: const Key('eli5Chip'),
+      constraints: const BoxConstraints(minHeight: 36),
+      padding: const EdgeInsets.only(left: 10, right: 2),
+      decoration: BoxDecoration(
+        color: c.accent.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: c.accent.withValues(alpha: 0.25), width: 1),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.child_care, size: 14, color: c.accent),
+          const SizedBox(width: 6),
+          Text(
+            'ELI5 Mode',
+            style: context.typography.labelMedium?.copyWith(
+              color: c.textPrimary,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          PressFeedback(
+            scaleFactor: 0.9,
+            child: InkWell(
+              key: const Key('eli5ChipClose'),
+              onTap: () => context.read<SciChatProvider>().toggleEli5Mode(),
+              borderRadius: BorderRadius.circular(10),
+              child: SizedBox(
+                width: 32,
+                height: 32,
+                child: Icon(Icons.close, size: 16, color: c.textMuted),
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -1251,17 +1808,42 @@ class _InputAreaState extends State<_InputArea> {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.description_outlined, size: 16, color: c.accent),
-            const SizedBox(width: 6),
-            Flexible(
-              child: Text(
-                paper.title,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: GoogleFonts.sourceSerif4(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                  color: c.textPrimary,
+            PressFeedback(
+              scaleFactor: 0.95,
+              child: Tooltip(
+                message: 'Buka pembaca PDF',
+                child: InkWell(
+                  onTap: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => PdfViewerScreen.fromPaper(paper: paper),
+                      ),
+                    );
+                  },
+                  borderRadius: BorderRadius.circular(8),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.description_outlined, size: 16, color: c.accent),
+                        const SizedBox(width: 6),
+                        Flexible(
+                          child: Text(
+                            paper.title,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: GoogleFonts.sourceSerif4(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              color: c.textPrimary,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
               ),
             ),
@@ -1312,27 +1894,127 @@ class _InputAreaState extends State<_InputArea> {
     );
   }
 
-  /// Panel konteks untuk tepat satu paper aktif (perilaku asli dipertahankan).
-  Widget _buildSingleContextPanel(BuildContext context) {
+  /// Banner horizontal ringkas untuk tepat satu paper aktif, terintegrasi
+  /// secara visual di bagian atas composer.
+  Widget _buildSingleContextBanner(BuildContext context) {
     final c = context.colors;
     final paper = widget.activeContexts.first;
+    final evidence = widget.contextEvidence[paper.id];
+
     return Container(
-      margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: BoxDecoration(
-        color: c.surface2,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: c.borderSubtle),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
+      key: const ValueKey('active_paper_banner'),
+      padding: const EdgeInsets.only(top: 2, bottom: 4),
+      child: Row(
         children: [
-          Row(
+          // 1. Ikon dokumen kecil dan indikator ketersediaan full text
+          _buildContextEvidenceIndicator(context, evidence),
+          const SizedBox(width: 8),
+
+          // 2. Judul paper dengan maxLines: 1 dan TextOverflow.ellipsis
+          Expanded(
+            child: Tooltip(
+              message: paper.title,
+              child: Text(
+                paper.title,
+                style: GoogleFonts.sourceSerif4(
+                  fontSize: 12,
+                  color: c.textPrimary,
+                  fontWeight: FontWeight.w600,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ),
+          const SizedBox(width: 4),
+
+          // 3. Tombol buka paper/PDF
+          PressFeedback(
+            scaleFactor: 0.88,
+            child: Tooltip(
+              message: 'Buka pembaca PDF',
+              child: Semantics(
+                label: 'Buka pembaca PDF',
+                button: true,
+                child: InkWell(
+                  onTap: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) =>
+                            PdfViewerScreen.fromPaper(paper: paper),
+                      ),
+                    );
+                  },
+                  borderRadius: BorderRadius.circular(12),
+                  child: Padding(
+                    padding: const EdgeInsets.all(4),
+                    child: Icon(
+                      Icons.chrome_reader_mode_outlined,
+                      size: 16,
+                      color: c.accent,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 2),
+
+          // 4. Tombol silang untuk menghapus konteks
+          PressFeedback(
+            scaleFactor: 0.88,
+            child: Tooltip(
+              message: 'Hapus konteks makalah',
+              child: Semantics(
+                label: 'Hapus konteks makalah',
+                button: true,
+                child: InkWell(
+                  onTap: () => widget.onRemoveContext(paper.id),
+                  borderRadius: BorderRadius.circular(12),
+                  child: Padding(
+                    padding: const EdgeInsets.all(4),
+                    child: Icon(
+                      Icons.close_rounded,
+                      size: 16,
+                      color: c.textMuted,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Indikator ketersediaan full text dan ikon dokumen dalam banner konteks.
+  Widget _buildContextEvidenceIndicator(
+      BuildContext context, PaperEvidence? evidence) {
+    final c = context.colors;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    if (evidence == null) {
+      return Tooltip(
+        message: 'Makalah aktif',
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2.5),
+          decoration: BoxDecoration(
+            color: c.accent.withValues(alpha: isDark ? 0.16 : 0.08),
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(
+              color: c.accent.withValues(alpha: isDark ? 0.28 : 0.16),
+              width: 0.8,
+            ),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(Icons.library_books_outlined, size: 14, color: c.accent),
-              const SizedBox(width: 6),
+              Icon(Icons.description_outlined, size: 12, color: c.accent),
+              const SizedBox(width: 4),
               Text(
-                'Active Paper Context',
+                'Paper',
                 style: GoogleFonts.jetBrainsMono(
                   fontSize: 10,
                   fontWeight: FontWeight.w600,
@@ -1341,45 +2023,113 @@ class _InputAreaState extends State<_InputArea> {
               ),
             ],
           ),
-          const SizedBox(height: 6),
-          Padding(
-            padding: const EdgeInsets.only(bottom: 8),
+        ),
+      );
+    }
+
+    if (evidence.level == EvidenceLevel.loading) {
+      return Tooltip(
+        message: 'Memeriksa ketersediaan teks...',
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2.5),
+          decoration: BoxDecoration(
+            color: isDark ? c.surface2 : Colors.grey.shade100,
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(
+              color: c.borderSubtle,
+              width: 0.8,
+            ),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.description_outlined, size: 12, color: c.textMuted),
+              const SizedBox(width: 4),
+              SizedBox(
+                width: 8,
+                height: 8,
+                child: CircularProgressIndicator(
+                  strokeWidth: 1.5,
+                  color: c.textMuted,
+                ),
+              ),
+              const SizedBox(width: 4),
+              Text(
+                'Memeriksa...',
+                style: GoogleFonts.sourceSerif4(
+                  fontSize: 10,
+                  color: c.textMuted,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    final IconData statusIcon;
+    final Color statusColor;
+    final String label;
+
+    switch (evidence.level) {
+      case EvidenceLevel.fullText:
+        statusIcon = Icons.check_circle_rounded;
+        statusColor = isDark ? const Color(0xFF4ADE80) : Colors.green.shade700;
+        label = 'Full text tersedia';
+        break;
+      case EvidenceLevel.abstractOnly:
+        statusIcon = Icons.article_outlined;
+        statusColor =
+            isDark ? const Color(0xFFFB923C) : Colors.orange.shade800;
+        label = 'Abstract saja';
+        break;
+      case EvidenceLevel.noUsableText:
+      default:
+        statusIcon = Icons.error_outline_rounded;
+        statusColor = isDark ? const Color(0xFFF87171) : Colors.red.shade700;
+        label = 'Teks tidak tersedia';
+        break;
+    }
+
+    return Tooltip(
+      message: label,
+      child: Semantics(
+        label: label,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 130),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2.5),
+            decoration: BoxDecoration(
+              color: statusColor.withValues(alpha: isDark ? 0.16 : 0.08),
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(
+                color: statusColor.withValues(alpha: isDark ? 0.30 : 0.20),
+                width: 0.8,
+              ),
+            ),
             child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
               children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        paper.title,
-                        style: GoogleFonts.sourceSerif4(
-                          fontSize: 12,
-                          color: c.textPrimary,
-                          fontWeight: FontWeight.w600,
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      const SizedBox(height: 2),
-                      _EvidenceStatus(evidence: widget.contextEvidence[paper.id]),
-                    ],
+                Icon(Icons.description_outlined, size: 12, color: statusColor),
+                const SizedBox(width: 3),
+                Icon(statusIcon, size: 10, color: statusColor),
+                const SizedBox(width: 4),
+                Flexible(
+                  child: Text(
+                    label,
+                    style: GoogleFonts.sourceSerif4(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w600,
+                      color: statusColor,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
                 ),
-                PressFeedback(
-                    scaleFactor: 0.9,
-                    child: InkWell(
-                      onTap: () => widget.onRemoveContext(paper.id),
-                      borderRadius: BorderRadius.circular(12),
-                      child: Padding(
-                        padding: const EdgeInsets.all(4),
-                        child: Icon(Icons.close, size: 16, color: c.textMuted),
-                      ),
-                    )),
               ],
             ),
           ),
-        ],
+        ),
       ),
     );
   }
@@ -1463,6 +2213,7 @@ class _InputAreaState extends State<_InputArea> {
   Widget build(BuildContext context) {
     final c = context.colors;
     final focused = widget.hasFocus;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return Container(
       margin: EdgeInsets.fromLTRB(
@@ -1486,26 +2237,34 @@ class _InputAreaState extends State<_InputArea> {
               ),
             ),
           if (_showSkillMenu) _buildSkillMenu(context),
+          if (_showToolsMenu) _buildToolsMenu(context),
           if (widget.activeContexts.length > 1)
-            _buildCompactContextBar(context)
-          else if (widget.activeContexts.length == 1)
-            _buildSingleContextPanel(context),
+            _buildCompactContextBar(context),
           AnimatedContainer(
             duration: 180.ms,
             curve: Curves.easeOutCubic,
             decoration: BoxDecoration(
-              color: c.surface1,
+              color: isDark ? c.surface1 : Colors.white,
               borderRadius: BorderRadius.circular(24),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withValues(alpha: focused ? 0.08 : 0.04),
-                  blurRadius: 16,
+                  color: Colors.black.withValues(
+                      alpha: isDark ? 0.35 : (focused ? 0.09 : 0.06)),
+                  blurRadius: focused ? 18 : 12,
                   offset: const Offset(0, 4),
+                ),
+                BoxShadow(
+                  color: Colors.black.withValues(
+                      alpha: isDark ? 0.20 : (focused ? 0.04 : 0.02)),
+                  blurRadius: 4,
+                  offset: const Offset(0, 1),
                 ),
               ],
               border: Border.all(
-                color: focused ? c.borderMedium : c.borderSubtle,
-                width: 1,
+                color: focused
+                    ? c.borderMedium
+                    : (isDark ? c.borderSubtle : const Color(0xFFDCDCE2)),
+                width: focused ? 1.4 : 1.1,
               ),
             ),
             padding: const EdgeInsets.fromLTRB(14, 4, 8, 6),
@@ -1513,6 +2272,15 @@ class _InputAreaState extends State<_InputArea> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                if (widget.activeContexts.length == 1) ...[
+                  _buildSingleContextBanner(context),
+                  Divider(
+                    height: 1,
+                    thickness: 0.8,
+                    color: isDark ? c.borderSubtle : const Color(0xFFECECEF),
+                  ),
+                  const SizedBox(height: 2),
+                ],
                 TextField(
                   controller: widget.controller,
                   focusNode: widget.focusNode,
@@ -1556,11 +2324,18 @@ class _InputAreaState extends State<_InputArea> {
                         scrollDirection: Axis.horizontal,
                         child: Row(
                           children: [
-                            _buildAddMenu(context),
+                            _buildToolsMenuButton(context),
                             const SizedBox(width: 8),
                             _buildAttachControl(context),
-                            if (context.watch<SciChatProvider>().activeSkill !=
-                                AiSkill.none) ...[
+                            if (widget.deepSearch) ...[
+                              const SizedBox(width: 8),
+                              _buildDeepSearchChip(context),
+                            ],
+                            if (widget.eli5Mode) ...[
+                              const SizedBox(width: 8),
+                              _buildEli5Chip(context),
+                            ],
+                            if (widget.activeSkill != AiSkill.none) ...[
                               const SizedBox(width: 8),
                               _buildSkillChip(context),
                             ],
@@ -2692,6 +3467,22 @@ class _ActiveContextSheet extends StatelessWidget {
                                   ],
                                 ),
                               ),
+                            ),
+                            IconButton(
+                              tooltip: 'Buka Pembaca PDF',
+                              constraints: const BoxConstraints(
+                                  minWidth: 48, minHeight: 48),
+                              icon: Icon(Icons.chrome_reader_mode_outlined,
+                                  size: 18, color: c.accent),
+                              onPressed: () {
+                                Navigator.push(
+                                  ctx,
+                                  MaterialPageRoute(
+                                    builder: (_) =>
+                                        PdfViewerScreen.fromPaper(paper: paper),
+                                  ),
+                                );
+                              },
                             ),
                             IconButton(
                               tooltip: 'Hapus dari konteks',

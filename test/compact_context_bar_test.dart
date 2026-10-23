@@ -183,14 +183,14 @@ void main() {
       await tester.pump(const Duration(seconds: 6));
     });
 
-    testWidgets('1 paper tetap memakai panel Active Paper Context',
+    testWidgets('1 paper tetap memakai panel banner ringkas',
         (tester) async {
       await activate(1);
       await tester.pumpWidget(_app(provider));
       await tester.pump();
 
       expect(find.byKey(const ValueKey('active_context_bar')), findsNothing);
-      expect(find.text('Active Paper Context'), findsOneWidget);
+      expect(find.byKey(const ValueKey('active_paper_banner')), findsOneWidget);
       expect(find.textContaining('Judul Makalah Nomor 1'), findsOneWidget);
       expect(find.text('Full text tersedia'), findsOneWidget);
       await tester.pump(const Duration(seconds: 6));
