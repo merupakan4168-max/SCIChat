@@ -296,11 +296,11 @@ void main() {
       expect(key8k, isNot(equals(key40k)),
           reason: 'Key cache harus dipartisi berdasarkan maxChars');
 
-      // 1. Ekstraksi untuk Tanya Paper (8.000 karakter)
+      // 1. Ekstraksi untuk Tanya Paper (kChatEvidenceMaxChars)
       await provider.fetchPaperEvidence(paper,
           maxChars: SciChatProvider.kChatEvidenceMaxChars);
       expect(pdfService.extractUrlCallCount, equals(1));
-      expect(pdfService.recordedMaxChars.last, equals(8000));
+      expect(pdfService.recordedMaxChars.last, equals(SciChatProvider.kChatEvidenceMaxChars));
       expect(provider.paperEvidenceCache.containsKey(key8k), isTrue);
       expect(provider.paperEvidenceCache.containsKey(key40k), isFalse);
 
@@ -538,8 +538,15 @@ void main() {
 
       // Siapkan sesi untuk loadSession, deleteSession, branchSession
       final sessionAId = provider.activeSessionId;
+      provider.messages.add(ChatMessage(
+        id: 'msg_session_a',
+        role: MessageRole.user,
+        content: 'Pertanyaan riset sesi A',
+        timestamp: DateTime.now(),
+      ));
       provider.createNewSession();
       final sessionBId = provider.activeSessionId;
+      expect(sessionBId, isNot(equals(sessionAId)));
       final token5 = provider.contextGenerationToken;
       expect(token5, greaterThan(token4));
 
