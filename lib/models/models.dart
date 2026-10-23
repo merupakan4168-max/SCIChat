@@ -600,24 +600,28 @@ class ChatSession {
   final String title;
   final DateTime updatedAt;
   final List<ChatMessage> messages;
+  final bool isCustomTitle;
 
   const ChatSession({
     required this.id,
     required this.title,
     required this.updatedAt,
     required this.messages,
+    this.isCustomTitle = false,
   });
 
   ChatSession copyWith({
     String? title,
     DateTime? updatedAt,
     List<ChatMessage>? messages,
+    bool? isCustomTitle,
   }) =>
       ChatSession(
         id: id,
         title: title ?? this.title,
         updatedAt: updatedAt ?? this.updatedAt,
         messages: messages ?? this.messages,
+        isCustomTitle: isCustomTitle ?? this.isCustomTitle,
       );
 
   Map<String, dynamic> toJson() => {
@@ -625,6 +629,7 @@ class ChatSession {
         'title': title,
         'updatedAt': updatedAt.toIso8601String(),
         'messages': messages.map((m) => m.toJson()).toList(),
+        if (isCustomTitle) 'isCustomTitle': true,
       };
 
   factory ChatSession.fromJson(Map<String, dynamic> j) => ChatSession(
@@ -635,6 +640,7 @@ class ChatSession {
                 ?.map((m) => ChatMessage.fromJson(m))
                 .toList() ??
             [],
+        isCustomTitle: j['isCustomTitle'] == true,
       );
 }
 

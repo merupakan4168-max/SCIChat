@@ -22,6 +22,7 @@ import '../widgets/paper_card.dart';
 import '../widgets/press_feedback.dart';
 import 'guide_screen.dart';
 import '../utils/follow_up_parser.dart';
+import '../utils/time_grouping.dart';
 
 class ChatScreen extends StatefulWidget {
   const ChatScreen({super.key});
@@ -186,7 +187,6 @@ class _ChatScreenState extends State<ChatScreen> {
 
     return Scaffold(
       backgroundColor: context.colors.surface0,
-      drawer: const _ChatDrawer(),
       appBar: _buildAppBar(context, provider),
       body: Stack(
         children: [
@@ -463,6 +463,21 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  void _openResearchDrawer(BuildContext context) {
+    HapticFeedback.lightImpact();
+    // Prioritaskan membuka Drawer pada root Scaffold (HomeScreen)
+    final rootScaffold = context.findRootAncestorStateOfType<ScaffoldState>();
+    if (rootScaffold != null && rootScaffold.hasDrawer) {
+      rootScaffold.openDrawer();
+      return;
+    }
+    // Fallback jika ada Scaffold lokal yang memiliki drawer (misal saat standalone test)
+    final localScaffold = Scaffold.maybeOf(context);
+    if (localScaffold != null && localScaffold.hasDrawer) {
+      localScaffold.openDrawer();
+    }
+  }
+
   AppBar _buildAppBar(BuildContext context, SciChatProvider provider) {
     return AppBar(
       backgroundColor: context.colors.surface0,
@@ -476,10 +491,7 @@ class _ChatScreenState extends State<ChatScreen> {
           icon: const Icon(Icons.menu, size: 22),
           color: context.colors.textPrimary,
           tooltip: 'Buka riwayat riset',
-          onPressed: () {
-            HapticFeedback.lightImpact();
-            Scaffold.of(scaffoldContext).openDrawer();
-          },
+          onPressed: () => _openResearchDrawer(scaffoldContext),
         ),
       ),
       title: Builder(
@@ -490,10 +502,7 @@ class _ChatScreenState extends State<ChatScreen> {
           child: Tooltip(
             message: 'Buka riwayat riset',
             child: InkWell(
-              onTap: () {
-                HapticFeedback.lightImpact();
-                Scaffold.of(scaffoldContext).openDrawer();
-              },
+              onTap: () => _openResearchDrawer(scaffoldContext),
               borderRadius: BorderRadius.circular(8),
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -1932,24 +1941,395 @@ class _SummarizeSheetState extends State<_SummarizeSheet> {
   }
 }
 
+class _RenameSessionDialog extends StatefulWidget {
+  final String initialTitle;
+
+  const _RenameSessionDialog({required this.initialTitle});
+
+  @override
+  State<_RenameSessionDialog> createState() => _RenameSessionDialogState();
+}
+
+class _RenameSessionDialogState extends State<_RenameSessionDialog> {
+  late final TextEditingController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(text: widget.initialTitle);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final text = _controller.text.trim();
+    if (text.isNotEmpty) {
+      Navigator.pop(context, text);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: context.colors.surface1,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: BorderSide(color: context.colors.borderSubtle),
+      ),
+      title: Text(
+        'Ganti Nama Sesi',
+        style: context.typography.titleMedium?.copyWith(
+          fontWeight: FontWeight.w700,
+          color: context.colors.textPrimary,
+        ),
+      ),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            'Masukkan nama baru untuk sesi riset ini.',
+            style: context.typography.bodyMedium?.copyWith(
+              color: context.colors.textSecondary,
+              height: 1.4,
+            ),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _controller,
+            autofocus: true,
+            maxLength: 100,
+            style: context.typography.bodyMedium?.copyWith(
+              color: context.colors.textPrimary,
+            ),
+            decoration: InputDecoration(
+              hintText: 'Nama sesi riset...',
+              hintStyle: context.typography.bodyMedium?.copyWith(
+                color: context.colors.textMuted,
+              ),
+              filled: true,
+              fillColor: context.colors.surface0,
+              contentPadding:
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(8),
+                borderSide: BorderSide(color: context.colors.borderSubtle),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(8),
+                borderSide: BorderSide(color: context.colors.accent, width: 1.5),
+              ),
+            ),
+            onSubmitted: (_) => _submit(),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: Text(
+            'Batal',
+            style: TextStyle(color: context.colors.textMuted),
+          ),
+        ),
+        FilledButton(
+          style: FilledButton.styleFrom(
+            backgroundColor: context.colors.accent,
+          ),
+          onPressed: _submit,
+          child: const Text('Simpan'),
+        ),
+      ],
+    );
+  }
+}
+
 // ── Drawer (Chat Sessions) ──────────────────────────────────────────────────
-class _ChatDrawer extends StatelessWidget {
-  const _ChatDrawer();
+class ResearchHistoryDrawer extends StatefulWidget {
+  const ResearchHistoryDrawer({super.key});
+
+  @override
+  State<ResearchHistoryDrawer> createState() => _ResearchHistoryDrawerState();
+}
+
+class _ResearchHistoryDrawerState extends State<ResearchHistoryDrawer> {
+  late final TextEditingController _searchController;
+
+  @override
+  void initState() {
+    super.initState();
+    _searchController = TextEditingController();
+    _searchController.addListener(_onSearchChanged);
+  }
+
+  @override
+  void dispose() {
+    _searchController.removeListener(_onSearchChanged);
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  void _onSearchChanged() {
+    setState(() {});
+  }
+
+  String _getDisplayTitle(ChatSession session) {
+    final raw = session.title.trim();
+    if (raw.isEmpty || raw == 'New Chat' || raw == 'Obrolan Baru') {
+      return 'Obrolan Baru';
+    }
+    return raw;
+  }
+
+  Future<void> _confirmDeleteSession(BuildContext context,
+      SciChatProvider provider, ChatSession session) async {
+    final sessionTitle = _getDisplayTitle(session);
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: ctx.colors.surface1,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: BorderSide(color: ctx.colors.borderSubtle),
+        ),
+        title: Text(
+          'Hapus Sesi Riset?',
+          style: ctx.typography.titleMedium?.copyWith(
+            fontWeight: FontWeight.w700,
+            color: ctx.colors.textPrimary,
+          ),
+        ),
+        content: Text(
+          'Sesi "$sessionTitle" beserta seluruh riwayat percakapan di dalamnya akan dihapus secara permanen.',
+          style: ctx.typography.bodyMedium?.copyWith(
+            color: ctx.colors.textSecondary,
+            height: 1.45,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(
+              'Batal',
+              style: TextStyle(color: ctx.colors.textMuted),
+            ),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFFD32F2F),
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Hapus'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true && context.mounted) {
+      provider.deleteSession(session.id);
+    }
+  }
+
+  Future<void> _showRenameSessionDialog(BuildContext context,
+      SciChatProvider provider, ChatSession session) async {
+    final initialTitle = (session.title.trim().isEmpty ||
+            session.title == 'New Chat' ||
+            session.title == 'Obrolan Baru')
+        ? ''
+        : session.title;
+
+    final newTitle = await showDialog<String>(
+      context: context,
+      builder: (ctx) => _RenameSessionDialog(initialTitle: initialTitle),
+    );
+
+    if (newTitle != null && newTitle.isNotEmpty && context.mounted) {
+      await provider.renameSession(session.id, newTitle);
+    }
+  }
+
+  Widget _buildEmptySearchState(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.search_off_rounded,
+              size: 40,
+              color: context.colors.textMuted,
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'Riwayat tidak ditemukan',
+              style: context.typography.bodyMedium?.copyWith(
+                fontWeight: FontWeight.w600,
+                color: context.colors.textPrimary,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'Coba gunakan kata kunci lain untuk mencari riwayat riset Anda.',
+              style: context.typography.bodySmall?.copyWith(
+                color: context.colors.textMuted,
+                height: 1.4,
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSessionTile({
+    required BuildContext context,
+    required SciChatProvider provider,
+    required ChatSession session,
+    required bool isActive,
+  }) {
+    return PressFeedback(
+      scaleFactor: 0.985,
+      child: ListTile(
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
+        tileColor:
+            isActive ? context.colors.surface2 : Colors.transparent,
+        leading: Icon(
+          Icons.chat_bubble_outline,
+          size: 20,
+          color: isActive ? context.colors.accent : context.colors.textMuted,
+        ),
+        title: Text(
+          _getDisplayTitle(session),
+          style: context.typography.bodyMedium?.copyWith(
+            color: isActive
+                ? context.colors.textPrimary
+                : context.colors.textSecondary,
+            fontWeight: isActive ? FontWeight.w600 : FontWeight.w400,
+          ),
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+        ),
+        trailing: SizedBox(
+          width: 48,
+          height: 48,
+          child: PopupMenuButton<String>(
+            icon: Icon(
+              Icons.more_vert,
+              size: 20,
+              color: context.colors.textMuted,
+            ),
+            tooltip: 'Opsi sesi',
+            padding: EdgeInsets.zero,
+            color: context.colors.surface1,
+          elevation: 4,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+            side: BorderSide(color: context.colors.borderSubtle),
+          ),
+          onSelected: (action) {
+            if (action == 'rename') {
+              _showRenameSessionDialog(context, provider, session);
+            } else if (action == 'delete') {
+              _confirmDeleteSession(context, provider, session);
+            }
+          },
+          itemBuilder: (menuCtx) => [
+            PopupMenuItem<String>(
+              value: 'rename',
+              height: 40,
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.edit_outlined,
+                    size: 18,
+                    color: menuCtx.colors.textSecondary,
+                  ),
+                  const SizedBox(width: 10),
+                  Text(
+                    'Ganti Nama',
+                    style: menuCtx.typography.bodyMedium?.copyWith(
+                      color: menuCtx.colors.textPrimary,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            PopupMenuItem<String>(
+              value: 'delete',
+              height: 40,
+              child: Row(
+                children: [
+                  const Icon(
+                    Icons.delete_outline,
+                    size: 18,
+                    color: Color(0xFFD32F2F),
+                  ),
+                  const SizedBox(width: 10),
+                  Text(
+                    'Hapus',
+                    style: menuCtx.typography.bodyMedium?.copyWith(
+                      color: const Color(0xFFD32F2F),
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+      onTap: () {
+          provider.loadSession(session.id);
+          Navigator.pop(context);
+        },
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     final provider = context.watch<SciChatProvider>();
-    final sessions = provider.sessions;
+    // Filter non-destruktif: sembunyikan sesi kosong nonaktif dari daftar Drawer
+    // agar tidak menumpuk secara visual. Sesi aktif selalu ditampilkan (meski kosong),
+    // dan seluruh sesi yang memiliki pesan tetap dipertahankan.
+    final eligibleSessions = provider.sessions.where((s) {
+      return s.messages.isNotEmpty || s.id == provider.activeSessionId;
+    }).toList();
+
+    // Filter lokal berdasarkan judul yang ditampilkan (case-insensitive & whitespace-trimmed)
+    final query = _searchController.text.trim().toLowerCase();
+    final matchingSessions = query.isEmpty
+        ? eligibleSessions
+        : eligibleSessions.where((s) {
+            final title = _getDisplayTitle(s).toLowerCase();
+            return title.contains(query);
+          }).toList();
+
+    // Kelompokkan sesi riwayat berdasarkan waktu kalender lokal (Hari Ini, Kemarin, 7 Hari Terakhir, Lebih Lama).
+    // Kelompok waktu yang kosong otomatis dihilangkan oleh groupChatSessionsByTime.
+    final groupedSessions = groupChatSessionsByTime(matchingSessions);
 
     return Drawer(
       backgroundColor: context.colors.surface0,
       child: SafeArea(
+        bottom: false,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             // Header
             Padding(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
               child: Row(
                 children: [
                   Icon(Icons.history, color: context.colors.textPrimary),
@@ -1969,116 +2349,194 @@ class _ChatDrawer extends StatelessWidget {
               ),
             ),
 
-            const SizedBox(height: 16),
-            Divider(color: context.colors.borderSubtle, height: 1),
-
-            // Session List
-            Expanded(
-              child: ListView.builder(
-                itemCount: sessions.length,
-                itemBuilder: (ctx, i) {
-                  final session = sessions[i];
-                  final isActive = session.id == provider.activeSessionId;
-
-                  return PressFeedback(
-                      scaleFactor: 0.985,
-                      child: ListTile(
-                        contentPadding: const EdgeInsets.symmetric(
-                            horizontal: 16, vertical: 4),
-                        tileColor: isActive
-                            ? context.colors.surface2
-                            : Colors.transparent,
-                        leading: Icon(
-                          Icons.chat_bubble_outline,
-                          size: 20,
-                          color: isActive
-                              ? context.colors.accent
-                              : context.colors.textMuted,
-                        ),
-                        title: Text(
-                          (session.title.trim().isEmpty ||
-                                  session.title == 'New Chat')
-                              ? 'Obrolan Baru'
-                              : session.title,
-                          style: context.typography.bodyMedium?.copyWith(
-                            color: isActive
-                                ? context.colors.textPrimary
-                                : context.colors.textSecondary,
-                            fontWeight:
-                                isActive ? FontWeight.w600 : FontWeight.w400,
+            // Search Bar
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+              child: TextField(
+                controller: _searchController,
+                textInputAction: TextInputAction.search,
+                style: context.typography.bodyMedium?.copyWith(
+                  color: context.colors.textPrimary,
+                ),
+                decoration: InputDecoration(
+                  hintText: 'Cari riwayat riset...',
+                  hintStyle: context.typography.bodyMedium?.copyWith(
+                    color: context.colors.textMuted,
+                  ),
+                  prefixIcon: Icon(
+                    Icons.search,
+                    size: 20,
+                    color: context.colors.textMuted,
+                  ),
+                  suffixIcon: _searchController.text.isNotEmpty
+                      ? PressFeedback(
+                          scaleFactor: 0.92,
+                          child: IconButton(
+                            icon: Icon(
+                              Icons.clear,
+                              size: 18,
+                              color: context.colors.textMuted,
+                            ),
+                            tooltip: 'Hapus pencarian',
+                            onPressed: () {
+                              _searchController.clear();
+                            },
                           ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        trailing: IconButton(
-                          icon: Icon(Icons.delete_outline,
-                              size: 18, color: context.colors.textMuted),
-                          onPressed: () {
-                            provider.deleteSession(session.id);
-                          },
-                        ),
-                        onTap: () {
-                          provider.loadSession(session.id);
-                          Navigator.pop(context);
-                        },
-                      ));
-                },
+                        )
+                      : null,
+                  filled: true,
+                  fillColor: context.colors.surface1,
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  isDense: true,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(10),
+                    borderSide: BorderSide(color: context.colors.borderSubtle),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(10),
+                    borderSide: BorderSide(color: context.colors.borderSubtle),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(10),
+                    borderSide: BorderSide(
+                      color: context.colors.accent,
+                      width: 1.5,
+                    ),
+                  ),
+                ),
               ),
             ),
 
-            // Footer
             Divider(color: context.colors.borderSubtle, height: 1),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-              child: PressFeedback(
-                  scaleFactor: 0.97,
-                  child: ElevatedButton.icon(
-                    onPressed: () {
-                      provider.createNewSession();
-                      Navigator.pop(context); // Close drawer
-                    },
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: context.colors.accent,
-                      foregroundColor: context.colors.surface0,
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                      elevation: 0,
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(8)),
-                    ),
-                    icon: const Icon(Icons.edit_square, size: 20),
-                    label: Text(
-                      'Obrolan Baru',
-                      style: GoogleFonts.sourceSerif4(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  )),
+
+            // Session List with Time Grouping or Empty State
+            Expanded(
+              child: query.isNotEmpty && matchingSessions.isEmpty
+                  ? _buildEmptySearchState(context)
+                  : groupedSessions.isEmpty
+                      ? const SizedBox.shrink()
+                      : ListView.builder(
+                          keyboardDismissBehavior:
+                              ScrollViewKeyboardDismissBehavior.onDrag,
+                          itemCount: groupedSessions.length,
+                          itemBuilder: (ctx, groupIdx) {
+                            final groupItem = groupedSessions[groupIdx];
+                            return Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Padding(
+                                  padding:
+                                      const EdgeInsets.fromLTRB(16, 12, 16, 4),
+                                  child: Text(
+                                    groupItem.group.label,
+                                    style:
+                                        context.typography.labelSmall?.copyWith(
+                                      color: context.colors.textMuted,
+                                      fontWeight: FontWeight.w700,
+                                      letterSpacing: 0.5,
+                                    ),
+                                  ),
+                                ),
+                                ...groupItem.sessions.map((session) {
+                                  final isActive =
+                                      session.id == provider.activeSessionId;
+                                  return _buildSessionTile(
+                                    context: context,
+                                    provider: provider,
+                                    session: session,
+                                    isActive: isActive,
+                                  );
+                                }),
+                              ],
+                            );
+                          },
+                        ),
             ),
-            PressFeedback(
-                scaleFactor: 0.985,
-                child: ListTile(
-                  contentPadding:
-                      const EdgeInsets.symmetric(horizontal: 16, vertical: 0),
-                  leading: Icon(Icons.menu_book,
-                      color: context.colors.textSecondary),
-                  title: Text(
-                    'Panduan Riset',
-                    style: context.typography.bodyMedium?.copyWith(
-                      fontWeight: FontWeight.w600,
-                      color: context.colors.textPrimary,
+
+            // Sticky Footer
+            Container(
+              decoration: BoxDecoration(
+                color: context.colors.surface0,
+                border: Border(
+                  top: BorderSide(
+                    color: context.colors.borderSubtle,
+                    width: 1,
+                  ),
+                ),
+              ),
+              child: SafeArea(
+                top: false,
+                child: Material(
+                  color: Colors.transparent,
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        PressFeedback(
+                          scaleFactor: 0.97,
+                          child: ElevatedButton.icon(
+                            onPressed: () {
+                              provider.createNewSession();
+                              Navigator.pop(context); // Close drawer
+                            },
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: context.colors.accent,
+                              foregroundColor: context.colors.surface0,
+                              padding: const EdgeInsets.symmetric(vertical: 12),
+                              elevation: 0,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                            ),
+                            icon: const Icon(Icons.edit_square, size: 20),
+                            label: Text(
+                              'Obrolan Baru',
+                              style: GoogleFonts.sourceSerif4(
+                                fontSize: 15,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        PressFeedback(
+                          scaleFactor: 0.985,
+                          child: ListTile(
+                            contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 8, vertical: 0),
+                            dense: true,
+                            leading: Icon(
+                              Icons.menu_book,
+                              color: context.colors.textSecondary,
+                            ),
+                            title: Text(
+                              'Panduan Riset',
+                              style: context.typography.bodyMedium?.copyWith(
+                                fontWeight: FontWeight.w600,
+                                color: context.colors.textPrimary,
+                              ),
+                            ),
+                            onTap: () {
+                              Navigator.pop(context); // Close drawer first
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (context) => const GuideScreen(),
+                                ),
+                              );
+                            },
+                          ),
+                        ),
+                      ],
                     ),
                   ),
-                  onTap: () {
-                    Navigator.pop(context); // Close drawer first
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                          builder: (context) => const GuideScreen()),
-                    );
-                  },
-                )),
-            const SizedBox(height: 8),
+                ),
+              ),
+            ),
           ],
         ),
       ),

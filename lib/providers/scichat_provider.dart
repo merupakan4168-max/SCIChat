@@ -1072,18 +1072,34 @@ class SciChatProvider extends ChangeNotifier {
         n.sources.any((p) => p.id == cleanId));
   }
 
+  /// Membentuk judul ringkas dan bersih dari pesan pertama (maksimal 100 karakter).
+  /// Pemotongan visual elipsis dilakukan di layer UI (Drawer / AppBar),
+  /// sehingga teks asli tetap utuh tersimpan tanpa pemotongan agresif atau penambahan '...' di storage.
+  String _generateTitleFromFirstMessage(String content) {
+    final clean = content.trim().replaceAll(RegExp(r'\s+'), ' ');
+    if (clean.isEmpty) return 'Obrolan Baru';
+    const maxLength = 100;
+    return clean.length > maxLength
+        ? clean.substring(0, maxLength).trim()
+        : clean;
+  }
+
   void _syncSession() {
     final idx = _sessions.indexWhere((s) => s.id == _activeSessionId);
     if (idx != -1) {
-      String title = _sessions[idx].title;
-      if (title == 'New Chat' && _messages.isNotEmpty) {
+      final currentSession = _sessions[idx];
+      String title = currentSession.title;
+      // Jangan pernah menimpa judul yang telah diganti secara manual (isCustomTitle == true)
+      final isDefaultTitle = !currentSession.isCustomTitle &&
+          (title == 'New Chat' ||
+              title == 'Obrolan Baru' ||
+              title.trim().isEmpty);
+      if (isDefaultTitle && _messages.isNotEmpty) {
         final firstUserMsg = _messages.firstWhere((m) => m.isUser,
             orElse: () => _messages.first);
-        title = firstUserMsg.content.length > 30
-            ? '${firstUserMsg.content.substring(0, 30)}...'
-            : firstUserMsg.content;
+        title = _generateTitleFromFirstMessage(firstUserMsg.content);
       }
-      _sessions[idx] = _sessions[idx].copyWith(
+      _sessions[idx] = currentSession.copyWith(
         messages: _messages,
         updatedAt: DateTime.now(),
         title: title,
@@ -1097,9 +1113,7 @@ class SciChatProvider extends ChangeNotifier {
       _activeSessionId = originId;
       final firstUserMsg = _messages.firstWhere((m) => m.isUser,
           orElse: () => _messages.first);
-      final title = firstUserMsg.content.length > 30
-          ? '${firstUserMsg.content.substring(0, 30)}...'
-          : (firstUserMsg.content.isEmpty ? 'New Chat' : firstUserMsg.content);
+      final title = _generateTitleFromFirstMessage(firstUserMsg.content);
       _sessions.insert(
         0,
         ChatSession(
@@ -1116,6 +1130,22 @@ class SciChatProvider extends ChangeNotifier {
   void createNewSession({bool notify = true}) {
     _contextGenerationToken++;
     _abortActiveGenerationForSessionSwitch();
+
+    // Invariant Fase 2: Jika sesi aktif saat ini sudah ada dan masih kosong (belum memiliki pesan),
+    // gunakan kembali sesi tersebut alih-alih membuat duplikat sesi kosong baru.
+    final currentSessionIdx =
+        _sessions.indexWhere((s) => s.id == _activeSessionId);
+    if (currentSessionIdx != -1 &&
+        _messages.isEmpty &&
+        _sessions[currentSessionIdx].messages.isEmpty) {
+      _lastSearchResults = [];
+      _activeContexts = [];
+      _contextEvidence.clear();
+      _pendingAttachment = null;
+      if (notify) notifyListeners();
+      return;
+    }
+
     final newSession = ChatSession(
       id: _uuid.v4(),
       title: 'New Chat',
@@ -1260,6 +1290,30 @@ class SciChatProvider extends ChangeNotifier {
     }
     _storage.saveChatSessions(_sessions);
     notifyListeners();
+  }
+
+  /// Mengganti nama judul sesi riset secara manual dan menyimpannya secara persisten.
+  /// Menolak input yang kosong setelah di-trim dan membatasi panjang maksimal 100 karakter.
+  /// Menandai sesi dengan `isCustomTitle: true` agar judul manual tidak tertimpa oleh pembentukan judul otomatis.
+  Future<bool> renameSession(String id, String newTitle) async {
+    final cleanTitle = newTitle.trim().replaceAll(RegExp(r'\s+'), ' ');
+    if (cleanTitle.isEmpty) return false;
+    const maxLength = 100;
+    final boundedTitle = cleanTitle.length > maxLength
+        ? cleanTitle.substring(0, maxLength).trim()
+        : cleanTitle;
+
+    final idx = _sessions.indexWhere((s) => s.id == id);
+    if (idx == -1) return false;
+
+    _sessions[idx] = _sessions[idx].copyWith(
+      title: boundedTitle,
+      isCustomTitle: true,
+      updatedAt: DateTime.now(),
+    );
+    await _storage.saveChatSessions(_sessions);
+    notifyListeners();
+    return true;
   }
 
   // ── Chat ──────────────────────────────────────────────────────────────────

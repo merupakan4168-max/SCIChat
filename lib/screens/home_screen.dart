@@ -84,11 +84,13 @@ class _HomeScreenState extends State<HomeScreen> {
           systemNavigationBarIconBrightness: isDark ? Brightness.light : Brightness.dark,
         ),
         child: Scaffold(
-        backgroundColor: colors.surface0,
-        body: IndexedStack(
-          index: currentIndex,
-          children: _screens,
-        ),
+          backgroundColor: colors.surface0,
+          drawer: const ResearchHistoryDrawer(),
+          drawerEnableOpenDragGesture: currentIndex == 0,
+          body: IndexedStack(
+            index: currentIndex,
+            children: _screens,
+          ),
         bottomNavigationBar: Theme(
           data: Theme.of(context).copyWith(
             splashColor: Colors.transparent,
