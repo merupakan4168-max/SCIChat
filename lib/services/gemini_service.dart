@@ -24,6 +24,19 @@ class GeminiService {
   })  : _client = client,
         _baseUrl = baseUrl ?? 'https://apihub.agnes-ai.com/v1';
 
+  static String sanitizeErrorMessage(String message, [String? apiKey]) {
+    var sanitized = message;
+    if (apiKey != null && apiKey.trim().isNotEmpty) {
+      sanitized = sanitized.replaceAll(apiKey.trim(), '[REDACTED_API_KEY]');
+    }
+    sanitized = sanitized.replaceAll(
+        RegExp(
+            r'(?:sk-[a-zA-Z0-9_\-]{8,}|key=[a-zA-Z0-9_\-]{8,}|Bearer\s+[a-zA-Z0-9_\-]{8,})',
+            caseSensitive: false),
+        '[REDACTED_CREDENTIAL]');
+    return sanitized;
+  }
+
   Future<String> _getModel() async {
     if (_resolvedModel != null) return _resolvedModel!;
 
@@ -467,11 +480,13 @@ Gunakan Bahasa Indonesia dalam setiap jawabanmu.
             '[AI_DEBUG] $debugLabel respons HTTP non-200, panjang error body: ${errBody.length}');
         try {
           final errJson = jsonDecode(errBody);
-          throw Exception(errJson['error']?['message'] ??
-              'Kesalahan API Agnes ${streamedResponse.statusCode}');
+          final rawMsg = errJson['error']?['message']?.toString() ??
+              'Kesalahan API Agnes ${streamedResponse.statusCode}';
+          throw Exception(sanitizeErrorMessage(rawMsg, apiKey));
         } catch (e) {
-          if (e is Exception && !e.toString().contains('FormatException'))
+          if (e is Exception && !e.toString().contains('FormatException')) {
             rethrow;
+          }
           throw Exception('Kesalahan API Agnes ${streamedResponse.statusCode}');
         }
       }
@@ -514,12 +529,13 @@ Gunakan Bahasa Indonesia dalam setiap jawabanmu.
             if (parsedJson.containsKey('error') &&
                 parsedJson['error'] != null) {
               final err = parsedJson['error'];
-              final errMsg = err is Map
+              final rawErrMsg = err is Map
                   ? (err['message']?.toString() ??
                       'Kesalahan dari server stream')
                   : err.toString();
               debugPrint('[AI_DEBUG] Server mengirim error dalam payload SSE');
-              throw Exception('SSE Error: $errMsg');
+              throw Exception(
+                  'SSE Error: ${sanitizeErrorMessage(rawErrMsg, apiKey)}');
             }
 
             final choices = parsedJson['choices'];
@@ -615,9 +631,8 @@ Harap spesifik dan presisi. Jangan tambahkan informasi yang tidak ada dalam doku
     String? safeDoi;
     if (paper.doi != null && paper.doi!.trim().isNotEmpty) {
       final cleanDoi = paper.doi!.trim();
-      safeDoi = cleanDoi.length > 150
-          ? '${cleanDoi.substring(0, 147)}...'
-          : cleanDoi;
+      safeDoi =
+          cleanDoi.length > 150 ? '${cleanDoi.substring(0, 147)}...' : cleanDoi;
     }
 
     final metaBuffer = StringBuffer();
@@ -658,9 +673,8 @@ Harap spesifik dan presisi. Jangan tambahkan informasi yang tidak ada dalam doku
     }
 
     // 3. Hitung anggaran tersisa untuk konteks PDF (PDF context dipangkas terlebih dahulu jika budget terbatas)
-    final usedSoFar = coreInstructionsLength +
-        metaBuffer.length +
-        abstractBuffer.length;
+    final usedSoFar =
+        coreInstructionsLength + metaBuffer.length + abstractBuffer.length;
     final availableForPdf = maxTotalChars - usedSoFar;
 
     String pdfContent = '';

@@ -94,6 +94,7 @@ class SciChatProvider extends ChangeNotifier {
   String? _errorMessage;
   String _apiKey = '';
   bool _apiKeySet = false;
+  bool _apiKeyStorageError = false;
   ThemeMode _themeMode = ThemeMode.system;
   bool _eli5Mode = false;
   bool _deepSearch = false;
@@ -154,6 +155,7 @@ class SciChatProvider extends ChangeNotifier {
   AppState get appState => _appState;
   String? get errorMessage => _errorMessage;
   bool get apiKeySet => _apiKeySet;
+  bool get apiKeyStorageError => _apiKeyStorageError;
   String get apiKey => _apiKey;
   ThemeMode get themeMode => _themeMode;
   bool get eli5Mode => _eli5Mode;
@@ -1166,30 +1168,80 @@ class SciChatProvider extends ChangeNotifier {
 
   // ── Initialization ────────────────────────────────────────────────────────
   Future<void> init() async {
-    String? savedKey = await _storage.getApiKey();
-    _apiKey = savedKey ?? '';
-    _apiKeySet = _apiKey.trim().isNotEmpty;
+    try {
+      final savedKey = await _storage.getApiKey();
+      _apiKey = savedKey ?? '';
+      _apiKeySet = _apiKey.trim().isNotEmpty;
+      _apiKeyStorageError = false;
+    } on SecureStorageReadException catch (e) {
+      debugPrint('[STORAGE_RESILIENCE] Gagal membaca API key dari storage: $e');
+      _apiKey = '';
+      _apiKeySet = false;
+      _apiKeyStorageError = true;
+    } catch (e) {
+      debugPrint(
+          '[STORAGE_RESILIENCE] Error tidak terduga saat memuat API key: $e');
+      _apiKey = '';
+      _apiKeySet = false;
+      _apiKeyStorageError = true;
+    }
     if (!_hasCustomGemini) {
       _gemini = GeminiService(apiKey: _apiKey);
     }
-    _favorites = await _storage.getFavorites();
-    _notes = await _storage.getNotes();
+    try {
+      _favorites = await _storage.getFavorites();
+    } catch (e) {
+      debugPrint('[STORAGE_RESILIENCE] Gagal memuat favorit di init: $e');
+      _favorites = [];
+    }
+
+    try {
+      _notes = await _storage.getNotes();
+    } catch (e) {
+      debugPrint('[STORAGE_RESILIENCE] Gagal memuat catatan di init: $e');
+      _notes = [];
+    }
 
     final savedTheme = await _storage.getThemeMode();
-    if (savedTheme == 'light')
+    if (savedTheme == 'light') {
       _themeMode = ThemeMode.light;
-    else if (savedTheme == 'dark')
+    } else if (savedTheme == 'dark') {
       _themeMode = ThemeMode.dark;
-    else
+    } else {
       _themeMode = ThemeMode.system;
+    }
 
     // Restore persisted search preferences before first search
     _filter = await _storage.getSearchFilter();
 
-    _sessions = await _storage.getChatSessions();
-    if (_sessions.isEmpty) {
+    final sessionsResult = await _storage.loadChatSessionsResult();
+    if (sessionsResult.isReadError) {
+      // Storage read failed due to I/O error or platform exception.
+      // Do NOT create and save a new session over disk!
+      debugPrint(
+          '[STORAGE_RESILIENCE] Storage read error in init(): ${sessionsResult.error}');
+      _sessions = [];
+      _messages = [];
+    } else if (sessionsResult.status == StorageLoadStatus.empty) {
+      // Genuinely empty (fresh install / user cleared history). Safe to initialize default session.
+      _sessions = [];
       createNewSession(notify: false);
+    } else if (sessionsResult.status == StorageLoadStatus.allCorrupt) {
+      // All items were corrupt and have been quarantined.
+      // Provide an in-memory session so the user can interact, but DO NOT overwrite _chatHistoryKey!
+      _sessions = [
+        ChatSession(
+          id: _uuid.v4(),
+          title: 'New Chat',
+          updatedAt: DateTime.now(),
+          messages: const [],
+        )
+      ];
+      _activeSessionId = _sessions.first.id;
+      _messages = [];
     } else {
+      // success or partialCorrupt: valid sessions loaded!
+      _sessions = sessionsResult.items;
       _activeSessionId = _sessions.first.id;
       _messages = List.from(_sessions.first.messages);
     }
@@ -1308,13 +1360,33 @@ class SciChatProvider extends ChangeNotifier {
   }
 
   Future<void> setApiKey(String key) async {
-    _apiKey = key.trim();
-    _apiKeySet = _apiKey.isNotEmpty;
-    if (_apiKeySet && !_hasCustomGemini) {
+    final cleanKey = key.trim();
+    if (cleanKey.isEmpty) {
+      await deleteApiKey();
+      return;
+    }
+    _apiKey = cleanKey;
+    _apiKeySet = true;
+    _apiKeyStorageError = false;
+    if (!_hasCustomGemini) {
       _gemini = GeminiService(apiKey: _apiKey);
     }
     await _storage.saveApiKey(_apiKey);
     notifyListeners();
+  }
+
+  Future<bool> deleteApiKey() async {
+    final success = await _storage.deleteApiKey();
+    if (success) {
+      _apiKey = '';
+      _apiKeySet = false;
+      _apiKeyStorageError = false;
+      if (!_hasCustomGemini) {
+        _gemini = GeminiService(apiKey: '');
+      }
+      notifyListeners();
+    }
+    return success;
   }
 
   void toggleEli5Mode() {

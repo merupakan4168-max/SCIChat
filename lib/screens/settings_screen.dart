@@ -63,6 +63,74 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (mounted) setState(() => _keySaved = false);
   }
 
+  Future<void> _deleteKey() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: ctx.colors.surface1,
+        title: Text(
+          'Hapus Kunci API?',
+          style: ctx.typography.titleMedium?.copyWith(
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        content: Text(
+          'Kunci API yang tersimpan di penyimpanan aman perangkat akan dihapus. Anda perlu memasukkan kunci API baru untuk menggunakan respons cerdas dan ringkasan AI.',
+          style: ctx.typography.bodyMedium?.copyWith(
+            color: ctx.colors.textSecondary,
+            height: 1.45,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(
+              'Batal',
+              style: TextStyle(color: ctx.colors.textMuted),
+            ),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFFC04D4D),
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(
+              'Hapus',
+              style: TextStyle(color: ctx.colors.surface0),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true && mounted) {
+      final provider = context.read<SciChatProvider>();
+      final success = await provider.deleteApiKey();
+      if (!mounted) return;
+      if (success) {
+        setState(() {
+          _isEditingKey = false;
+          _keySaved = false;
+          _canSaveKey = false;
+          _keyController.clear();
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Kunci API berhasil dihapus dari perangkat.'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Gagal menghapus kunci API dari penyimpanan aman.'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    }
+  }
+
   Future<void> _launchAgnesPlatform() async {
     final uri = Uri.parse('https://apihub.agnes-ai.com');
     try {
@@ -82,7 +150,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Gagal meluncurkan peramban untuk platform Agnes AI.'),
+            content:
+                Text('Gagal meluncurkan peramban untuk platform Agnes AI.'),
             behavior: SnackBarBehavior.floating,
           ),
         );
@@ -134,15 +203,54 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     color: context.colors.accent,
                     fontWeight: FontWeight.w600,
                     decoration: TextDecoration.underline,
-                    decorationColor: context.colors.accent.withValues(alpha: 0.5),
+                    decorationColor:
+                        context.colors.accent.withValues(alpha: 0.5),
                   ),
-                  recognizer: TapGestureRecognizer()..onTap = _launchAgnesPlatform,
+                  recognizer: TapGestureRecognizer()
+                    ..onTap = _launchAgnesPlatform,
                 ),
                 const TextSpan(text: '.'),
               ],
             ),
           ),
           const SizedBox(height: 12),
+          if (provider.apiKeyStorageError && !provider.apiKeySet) ...[
+            Builder(
+              builder: (ctx) {
+                final errorColor = Theme.of(ctx).colorScheme.error;
+                return Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: errorColor.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                      color: errorColor.withValues(alpha: 0.3),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.lock_clock_outlined,
+                        size: 16,
+                        color: errorColor,
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Penyimpanan aman perangkat sedang tidak dapat diakses. Anda dapat memasukkan kembali kunci atau memuat ulang aplikasi.',
+                          style: ctx.typography.bodySmall?.copyWith(
+                            color: errorColor,
+                            height: 1.35,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
+            const SizedBox(height: 10),
+          ],
           if (provider.apiKeySet && !_isEditingKey)
             _SavedKeyPreviewCard(
               saved: _keySaved,
@@ -153,6 +261,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   _canSaveKey = false;
                 });
               },
+              onDelete: _deleteKey,
             )
           else ...[
             _ApiKeyInputField(
@@ -289,10 +398,12 @@ class _ActiveStatusBadge extends StatelessWidget {
 class _SavedKeyPreviewCard extends StatelessWidget {
   final bool saved;
   final VoidCallback onEdit;
+  final VoidCallback? onDelete;
 
   const _SavedKeyPreviewCard({
     required this.saved,
     required this.onEdit,
+    this.onDelete,
   });
 
   @override
@@ -361,6 +472,29 @@ class _SavedKeyPreviewCard extends StatelessWidget {
               ),
             ),
           ),
+          if (onDelete != null) ...[
+            const SizedBox(width: 8),
+            PressFeedback(
+              scaleFactor: 0.94,
+              child: IconButton(
+                onPressed: onDelete,
+                tooltip: 'Hapus Kunci API',
+                style: IconButton.styleFrom(
+                  minimumSize: const Size(36, 36),
+                  padding: EdgeInsets.zero,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    side: BorderSide(color: context.colors.borderSubtle),
+                  ),
+                ),
+                icon: const Icon(
+                  Icons.delete_outline,
+                  size: 18,
+                  color: Color(0xFFC04D4D),
+                ),
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -389,8 +523,8 @@ class _ApiKeyInputField extends StatelessWidget {
       ),
       decoration: InputDecoration(
         hintText: 'sk-…',
-        prefixIcon: Icon(Icons.key_outlined,
-            size: 18, color: context.colors.textMuted),
+        prefixIcon:
+            Icon(Icons.key_outlined, size: 18, color: context.colors.textMuted),
         suffixIcon: PressFeedback(
           scaleFactor: 0.92,
           child: IconButton(

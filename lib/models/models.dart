@@ -567,20 +567,32 @@ class ArxivPaper {
       };
 
   factory ArxivPaper.fromJson(Map<String, dynamic> j) => ArxivPaper(
-        id: j['id'] ?? '',
-        title: j['title'] ?? '',
-        authors: List<String>.from(j['authors'] ?? []),
-        summary: j['summary'] ?? '',
-        published: j['published'] ?? '',
-        updated: j['updated'] ?? '',
-        categories: List<String>.from(j['categories'] ?? []),
-        pdfUrl: j['pdfUrl'] ?? '',
-        absUrl: j['absUrl'] ?? '',
-        doi: normalizeDoi(j['doi'] as String?),
-        journalRef: j['journalRef'],
-        citationCount: j['citationCount'] as int?,
-        referenceCount: j['referenceCount'] as int?,
-        sources: List<String>.from(j['sources'] ?? const []),
+        id: j['id']?.toString() ?? '',
+        title: j['title']?.toString() ?? '',
+        authors: (j['authors'] is List)
+            ? (j['authors'] as List).map((a) => a.toString()).toList()
+            : (j['authors'] != null && j['authors'].toString().isNotEmpty
+                ? [j['authors'].toString()]
+                : const <String>[]),
+        summary: j['summary']?.toString() ?? '',
+        published: j['published']?.toString() ?? '',
+        updated: j['updated']?.toString() ?? '',
+        categories: (j['categories'] is List)
+            ? (j['categories'] as List).map((c) => c.toString()).toList()
+            : const <String>[],
+        pdfUrl: j['pdfUrl']?.toString() ?? '',
+        absUrl: j['absUrl']?.toString() ?? '',
+        doi: normalizeDoi(j['doi']?.toString()),
+        journalRef: j['journalRef']?.toString(),
+        citationCount: j['citationCount'] is num
+            ? (j['citationCount'] as num).toInt()
+            : int.tryParse(j['citationCount']?.toString() ?? ''),
+        referenceCount: j['referenceCount'] is num
+            ? (j['referenceCount'] as num).toInt()
+            : int.tryParse(j['referenceCount']?.toString() ?? ''),
+        sources: (j['sources'] is List)
+            ? (j['sources'] as List).map((s) => s.toString()).toList()
+            : const <String>[],
       );
 }
 
@@ -602,8 +614,10 @@ class ChatMessage {
   final ChatErrorType? errorType;
   final bool isTruncated;
   final String? finishReason;
-  final Map<String, List<int>>? validatedCitationPages; // validated citation pages per documentId
-  final Map<String, Map<String, int>>? validatedSectionPages; // validated section-to-page mappings per documentId
+  final Map<String, List<int>>?
+      validatedCitationPages; // validated citation pages per documentId
+  final Map<String, Map<String, int>>?
+      validatedSectionPages; // validated section-to-page mappings per documentId
 
   const ChatMessage({
     required this.id,
@@ -672,45 +686,77 @@ class ChatMessage {
       };
 
   factory ChatMessage.fromJson(Map<String, dynamic> j) => ChatMessage(
-        id: j['id'] ?? '',
-        role: MessageRole.values.firstWhere((e) => e.toString() == j['role'],
+        id: j['id']?.toString() ?? '',
+        role: MessageRole.values.firstWhere(
+            (e) => e.toString() == j['role']?.toString(),
             orElse: () => MessageRole.user),
-        content: j['content'] ?? '',
-        timestamp: DateTime.tryParse(j['timestamp'] ?? '') ?? DateTime.now(),
+        content: j['content']?.toString() ?? '',
+        timestamp: DateTime.tryParse(j['timestamp']?.toString() ?? '') ??
+            DateTime.now(),
         status: MessageStatus.values.firstWhere(
-            (e) => e.toString() == j['status'],
+            (e) => e.toString() == j['status']?.toString(),
             orElse: () => MessageStatus.done),
-        papers: (j['papers'] as List?)
-                ?.map((p) => ArxivPaper.fromJson(p))
-                .toList() ??
-            [],
+        papers: (j['papers'] is List)
+            ? (j['papers'] as List)
+                .map((p) {
+                  try {
+                    if (p is Map<String, dynamic>) {
+                      return ArxivPaper.fromJson(p);
+                    }
+                    if (p is Map) {
+                      return ArxivPaper.fromJson(Map<String, dynamic>.from(p));
+                    }
+                  } catch (_) {}
+                  return null;
+                })
+                .whereType<ArxivPaper>()
+                .toList()
+            : const [],
         attachmentName: j['attachmentName'] as String?,
-        followUpSuggestions: (j['followUpSuggestions'] as List?)
-                ?.map((s) => s.toString())
-                .toList() ??
-            const [],
+        followUpSuggestions: (j['followUpSuggestions'] is List)
+            ? (j['followUpSuggestions'] as List)
+                .map((s) => s.toString())
+                .toList()
+            : const [],
         errorType: j['errorType'] == null
             ? null
             : ChatErrorType.values.firstWhere(
-                (e) => e.toString() == j['errorType'],
+                (e) => e.toString() == j['errorType']?.toString(),
                 orElse: () => ChatErrorType.unknown,
               ),
         isTruncated: j['isTruncated'] == true,
         finishReason: j['finishReason'] as String?,
-        validatedCitationPages: (j['validatedCitationPages'] as Map?)?.map(
-          (k, v) => MapEntry(
-            k.toString(),
-            (v as List).map((e) => (e as num).toInt()).toList(),
-          ),
-        ),
-        validatedSectionPages: (j['validatedSectionPages'] as Map?)?.map(
-          (k, v) => MapEntry(
-            k.toString(),
-            (v as Map).map(
-              (sk, sv) => MapEntry(sk.toString(), (sv as num).toInt()),
-            ),
-          ),
-        ),
+        validatedCitationPages: (j['validatedCitationPages'] is Map)
+            ? (j['validatedCitationPages'] as Map).map(
+                (k, v) => MapEntry(
+                  k.toString(),
+                  (v is List)
+                      ? v
+                          .map((e) => e is num
+                              ? e.toInt()
+                              : int.tryParse(e.toString()) ?? 0)
+                          .toList()
+                      : <int>[],
+                ),
+              )
+            : null,
+        validatedSectionPages: (j['validatedSectionPages'] is Map)
+            ? (j['validatedSectionPages'] as Map).map(
+                (k, v) => MapEntry(
+                  k.toString(),
+                  (v is Map)
+                      ? v.map(
+                          (sk, sv) => MapEntry(
+                            sk.toString(),
+                            sv is num
+                                ? sv.toInt()
+                                : int.tryParse(sv.toString()) ?? 0,
+                          ),
+                        )
+                      : <String, int>{},
+                ),
+              )
+            : null,
       );
 }
 
@@ -813,13 +859,26 @@ class ChatSession {
       };
 
   factory ChatSession.fromJson(Map<String, dynamic> j) => ChatSession(
-        id: j['id'] ?? '',
-        title: j['title'] ?? 'New Chat',
-        updatedAt: DateTime.tryParse(j['updatedAt'] ?? '') ?? DateTime.now(),
-        messages: (j['messages'] as List?)
-                ?.map((m) => ChatMessage.fromJson(m))
-                .toList() ??
-            [],
+        id: j['id']?.toString() ?? '',
+        title: j['title']?.toString() ?? 'New Chat',
+        updatedAt: DateTime.tryParse(j['updatedAt']?.toString() ?? '') ??
+            DateTime.now(),
+        messages: (j['messages'] is List)
+            ? (j['messages'] as List)
+                .map((m) {
+                  try {
+                    if (m is Map<String, dynamic>) {
+                      return ChatMessage.fromJson(m);
+                    }
+                    if (m is Map) {
+                      return ChatMessage.fromJson(Map<String, dynamic>.from(m));
+                    }
+                  } catch (_) {}
+                  return null;
+                })
+                .whereType<ChatMessage>()
+                .toList()
+            : const [],
         isCustomTitle: j['isCustomTitle'] == true,
       );
 }
@@ -848,19 +907,34 @@ class ResearchNote {
       };
 
   factory ResearchNote.fromJson(Map<String, dynamic> j) => ResearchNote(
-        id: j['id'] ?? '',
-        sourceMessageId: j['sourceMessageId'] ?? '',
-        content: j['content'] ?? '',
-        sources: (j['sources'] as List?)
-                ?.map((p) => ArxivPaper.fromJson(p))
-                .toList() ??
-            [],
-        savedAt: DateTime.tryParse(j['savedAt'] ?? '') ?? DateTime.now(),
+        id: j['id']?.toString() ?? '',
+        sourceMessageId: j['sourceMessageId']?.toString() ?? '',
+        content: j['content']?.toString() ?? '',
+        sources: (j['sources'] is List)
+            ? (j['sources'] as List)
+                .map((p) {
+                  try {
+                    if (p is Map<String, dynamic>) {
+                      return ArxivPaper.fromJson(p);
+                    }
+                    if (p is Map) {
+                      return ArxivPaper.fromJson(Map<String, dynamic>.from(p));
+                    }
+                  } catch (_) {}
+                  return null;
+                })
+                .whereType<ArxivPaper>()
+                .toList()
+            : const [],
+        savedAt:
+            DateTime.tryParse(j['savedAt']?.toString() ?? '') ?? DateTime.now(),
       );
 
   /// Menandakan apakah catatan ini berasal dari ringkasan paper mandiri (bukan dari obrolan).
   bool get isPaperSummary =>
-      sourceMessageId.isEmpty && sources.isNotEmpty && sources.first.id.isNotEmpty;
+      sourceMessageId.isEmpty &&
+      sources.isNotEmpty &&
+      sources.first.id.isNotEmpty;
 
   /// Makalah sumber utama jika catatan ini merupakan ringkasan paper mandiri.
   ArxivPaper? get primaryPaper => isPaperSummary ? sources.first : null;
@@ -1418,11 +1492,11 @@ class SelectedTextContext {
   bool get isTooLong => text.trim().length > kMaxSelectionChars;
 
   /// Menghasilkan prompt terstruktur untuk dikirimkan ke asisten AI dengan atribusi jujur.
-  String formatPromptForAction(HighlightAction action, {String? customQuestion}) {
+  String formatPromptForAction(HighlightAction action,
+      {String? customQuestion}) {
     final cleanText = text.trim();
-    final pageInfo = (pageNumber != null && pageNumber! > 0)
-        ? ' (Halaman $pageNumber)'
-        : '';
+    final pageInfo =
+        (pageNumber != null && pageNumber! > 0) ? ' (Halaman $pageNumber)' : '';
 
     final buffer = StringBuffer();
     switch (action) {
@@ -1441,7 +1515,8 @@ class SelectedTextContext {
         buffer.writeln();
         buffer.writeln('> "$cleanText"');
         buffer.writeln();
-        buffer.writeln('Sajikan poin-poin inti ringkasan secara ringkas dan padat.');
+        buffer.writeln(
+            'Sajikan poin-poin inti ringkasan secara ringkas dan padat.');
         break;
       case HighlightAction.customPrompt:
         final question =
@@ -1501,5 +1576,3 @@ class SelectedTextContext {
   String toString() =>
       'SelectedTextContext(docId: $documentId, page: $pageNumber, len: ${text.length})';
 }
-
-
