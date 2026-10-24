@@ -346,9 +346,21 @@ Gunakan Bahasa Indonesia dalam setiap jawabanmu.
 
     final response = await _postWithRetry('/chat/completions', body);
     if (response.statusCode != 200) {
-      final err = jsonDecode(response.body);
-      throw Exception(err['error']?['message'] ??
-          'Kesalahan API Agnes ${response.statusCode}');
+      String rawMsg = 'Kesalahan API Agnes ${response.statusCode}';
+      try {
+        final errJson = jsonDecode(response.body);
+        if (errJson is Map && errJson['error'] is Map) {
+          final msg = errJson['error']['message']?.toString();
+          if (msg != null && msg.trim().isNotEmpty) {
+            rawMsg = msg;
+          }
+        }
+      } on FormatException {
+        // Body bukan JSON yang valid (misal respons HTML 502/504 gateway)
+      } catch (_) {
+        // Penanganan defensif terhadap bentuk respons tak terduga lainnya
+      }
+      throw Exception(sanitizeErrorMessage(rawMsg, apiKey));
     }
 
     final json = jsonDecode(response.body);
@@ -478,17 +490,21 @@ Gunakan Bahasa Indonesia dalam setiap jawabanmu.
             );
         debugPrint(
             '[AI_DEBUG] $debugLabel respons HTTP non-200, panjang error body: ${errBody.length}');
+        String rawMsg = 'Kesalahan API Agnes ${streamedResponse.statusCode}';
         try {
           final errJson = jsonDecode(errBody);
-          final rawMsg = errJson['error']?['message']?.toString() ??
-              'Kesalahan API Agnes ${streamedResponse.statusCode}';
-          throw Exception(sanitizeErrorMessage(rawMsg, apiKey));
-        } catch (e) {
-          if (e is Exception && !e.toString().contains('FormatException')) {
-            rethrow;
+          if (errJson is Map && errJson['error'] is Map) {
+            final msg = errJson['error']['message']?.toString();
+            if (msg != null && msg.trim().isNotEmpty) {
+              rawMsg = msg;
+            }
           }
-          throw Exception('Kesalahan API Agnes ${streamedResponse.statusCode}');
+        } on FormatException {
+          // Body bukan JSON yang valid (misal respons HTML 502/504 gateway)
+        } catch (_) {
+          // Penanganan defensif terhadap bentuk respons tak terduga lainnya
         }
+        throw Exception(sanitizeErrorMessage(rawMsg, apiKey));
       }
 
       final lineStream = streamedResponse.stream

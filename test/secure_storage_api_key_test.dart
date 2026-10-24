@@ -1,9 +1,26 @@
+import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:scichat/models/models.dart';
 import 'package:scichat/services/storage_service.dart';
 import 'package:scichat/services/gemini_service.dart';
+import 'package:scichat/services/search_service.dart';
 import 'package:scichat/providers/scichat_provider.dart';
+
+class _FakeSearchService extends SearchService {
+  @override
+  Future<List<ArxivPaper>> search({
+    required String query,
+    String? keywords = '',
+    SearchFilter filter = const SearchFilter(),
+    bool deep = false,
+    String? onlySource,
+  }) async =>
+      [];
+}
 
 class MockSecureStorage extends Fake implements FlutterSecureStorage {
   final Map<String, String> data = {};
@@ -414,7 +431,7 @@ void main() {
     });
   });
 
-  group('GeminiService - Sanitasi Error Secret Redaction', () {
+  group('GeminiService & Provider - Sanitasi Error SEC-LEAK-01', () {
     test(
         'sanitizeErrorMessage menyamarkan API key pengguna dan pola token rahasia',
         () {
@@ -437,6 +454,263 @@ void main() {
 
       expect(sanitized, isNot(contains('sk-random1234567890')));
       expect(sanitized, contains('[REDACTED_CREDENTIAL]'));
+    });
+
+    test(
+        'SEC-LEAK-01 (1): chat() HTTP error memuat API key pengguna -> disamarkan [REDACTED_API_KEY] dan tidak memuat key mentah',
+        () async {
+      const userApiKey = 'sk-user-live-secret-9876543210';
+      final mockClient = MockClient((request) async {
+        if (request.url.path.endsWith('/models')) {
+          return http.Response(
+            jsonEncode({
+              'data': [
+                {'id': 'agnes-3.0-flash'}
+              ]
+            }),
+            200,
+            headers: {'content-type': 'application/json'},
+          );
+        }
+        if (request.url.path.endsWith('/chat/completions')) {
+          return http.Response(
+            jsonEncode({
+              'error': {
+                'message':
+                    'API key sk-user-live-secret-9876543210 is invalid or revoked.',
+                'code': 401,
+              }
+            }),
+            401,
+            headers: {'content-type': 'application/json'},
+          );
+        }
+        return http.Response('Not Found', 404);
+      });
+
+      final service = GeminiService(
+        apiKey: userApiKey,
+        client: mockClient,
+      );
+
+      try {
+        await service.chat(
+          history: [],
+          userMessage: 'Halo',
+        );
+        fail('Harus melempar exception');
+      } catch (e) {
+        expect(e.toString(), isNot(contains(userApiKey)));
+        expect(e.toString(), contains('[REDACTED_API_KEY]'));
+        expect(e.toString(), contains('is invalid or revoked.'));
+      }
+    });
+
+    test(
+        'SEC-LEAK-01 (2): chat() HTTP error memuat pola Bearer atau credential token -> disamarkan [REDACTED_CREDENTIAL]',
+        () async {
+      const userApiKey = 'sk-user-standard-key-1111222233';
+      const foreignCredential = 'sk-foreign-upstream-secret-token-abcdef123';
+      final mockClient = MockClient((request) async {
+        if (request.url.path.endsWith('/models')) {
+          return http.Response(
+            jsonEncode({
+              'data': [
+                {'id': 'agnes-3.0-flash'}
+              ]
+            }),
+            200,
+            headers: {'content-type': 'application/json'},
+          );
+        }
+        if (request.url.path.endsWith('/chat/completions')) {
+          return http.Response(
+            jsonEncode({
+              'error': {
+                'message':
+                    'Upstream auth rejected: Bearer $foreignCredential for route /v1/chat',
+                'code': 403,
+              }
+            }),
+            403,
+            headers: {'content-type': 'application/json'},
+          );
+        }
+        return http.Response('Not Found', 404);
+      });
+
+      final service = GeminiService(
+        apiKey: userApiKey,
+        client: mockClient,
+      );
+
+      try {
+        await service.chat(
+          history: [],
+          userMessage: 'Halo',
+        );
+        fail('Harus melempar exception');
+      } catch (e) {
+        expect(e.toString(), isNot(contains(foreignCredential)));
+        expect(e.toString(), isNot(contains('Bearer $foreignCredential')));
+        expect(e.toString(), contains('[REDACTED_CREDENTIAL]'));
+      }
+    });
+
+    test(
+        'SEC-LEAK-01 (3): chat() HTTP error dengan payload malformed (HTML 502/non-JSON) -> tidak crash FormatException dan tidak bocorkan raw body',
+        () async {
+      const userApiKey = 'sk-user-key-safe-testing-4444';
+      const rawHtmlBody =
+          '<html><body><h1>502 Bad Gateway</h1><p>Trace secret: key=secrettraceheader99999</p></body></html>';
+      final mockClient = MockClient((request) async {
+        if (request.url.path.endsWith('/models')) {
+          return http.Response(
+            jsonEncode({
+              'data': [
+                {'id': 'agnes-3.0-flash'}
+              ]
+            }),
+            200,
+            headers: {'content-type': 'application/json'},
+          );
+        }
+        if (request.url.path.endsWith('/chat/completions')) {
+          return http.Response(
+            rawHtmlBody,
+            502,
+            headers: {'content-type': 'text/html'},
+          );
+        }
+        return http.Response('Not Found', 404);
+      });
+
+      final service = GeminiService(
+        apiKey: userApiKey,
+        client: mockClient,
+      );
+
+      try {
+        await service.chat(
+          history: [],
+          userMessage: 'Halo',
+        );
+        fail('Harus melempar exception');
+      } catch (e) {
+        expect(e.toString(), isNot(contains(rawHtmlBody)));
+        expect(e.toString(), isNot(contains('secrettraceheader99999')));
+        expect(e.toString(), contains('Kesalahan API Agnes 502'));
+        expect(e.toString(), isNot(contains('FormatException')));
+      }
+    });
+
+    test(
+        'SEC-LEAK-01 (4): chat() HTTP error biasa tanpa secret -> tetap menyampaikan informasi diagnostik yang aman',
+        () async {
+      const userApiKey = 'sk-user-normal-key-8888';
+      final mockClient = MockClient((request) async {
+        if (request.url.path.endsWith('/models')) {
+          return http.Response(
+            jsonEncode({
+              'data': [
+                {'id': 'agnes-3.0-flash'}
+              ]
+            }),
+            200,
+            headers: {'content-type': 'application/json'},
+          );
+        }
+        if (request.url.path.endsWith('/chat/completions')) {
+          return http.Response(
+            jsonEncode({
+              'error': {
+                'message':
+                    'Rate limit exceeded: 60 requests per minute allowed.',
+                'code': 429,
+              }
+            }),
+            429,
+            headers: {'content-type': 'application/json'},
+          );
+        }
+        return http.Response('Not Found', 404);
+      });
+
+      final service = GeminiService(
+        apiKey: userApiKey,
+        client: mockClient,
+      );
+
+      try {
+        await service.chat(
+          history: [],
+          userMessage: 'Halo',
+        );
+        fail('Harus melempar exception');
+      } catch (e) {
+        expect(e.toString(),
+            contains('Rate limit exceeded: 60 requests per minute allowed.'));
+      }
+    });
+
+    test(
+        'SEC-LEAK-01 (5): Fallback streaming ke chat() pada SciChatProvider tidak mencatat pesan mentah ke log atau state UI',
+        () async {
+      const userApiKey = 'sk-user-secret-in-provider-99999';
+      final mockClient = MockClient.streaming((request, bodyStream) async {
+        if (request.url.path.endsWith('/models')) {
+          return http.StreamedResponse(
+            Stream.value(utf8.encode(jsonEncode({
+              'data': [
+                {'id': 'agnes-3.0-flash'}
+              ]
+            }))),
+            200,
+          );
+        }
+        if (request.url.path.endsWith('/chat/completions')) {
+          final errorPayload = jsonEncode({
+            'error': {
+              'message':
+                  'Upstream failure for key $userApiKey during generation',
+              'code': 500,
+            }
+          });
+          return http.StreamedResponse(
+            Stream.value(utf8.encode(errorPayload)),
+            500,
+            headers: {'content-type': 'application/json'},
+          );
+        }
+        return http.StreamedResponse(
+            Stream.value(utf8.encode('Not Found')), 404);
+      });
+
+      final geminiService = GeminiService(
+        apiKey: userApiKey,
+        client: mockClient,
+      );
+
+      final provider = SciChatProvider(
+        geminiService: geminiService,
+        storageService: StorageService(secureStorage: MockSecureStorage()),
+        searchService: _FakeSearchService(),
+      );
+
+      await provider.sendMessage('Uji fallback error sanitization');
+
+      // State UI harus error
+      expect(provider.appState, equals(AppState.error));
+
+      // errorMessage tidak boleh mengandung key mentah
+      expect(provider.errorMessage, isNotNull);
+      expect(provider.errorMessage, isNot(contains(userApiKey)));
+      expect(provider.errorMessage, contains('[REDACTED_API_KEY]'));
+
+      // Pesan error di riwayat percakapan tidak boleh memuat key mentah
+      final lastMsg = provider.messages.last;
+      expect(lastMsg.status, equals(MessageStatus.error));
+      expect(lastMsg.content, isNot(contains(userApiKey)));
     });
   });
 
